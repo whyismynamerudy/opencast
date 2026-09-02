@@ -14,6 +14,7 @@ import { MediaPreview, formatTime } from "./MediaPreview";
 import { Timeline } from "./Timeline";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { UploadScreen } from "./UploadScreen";
+import { SourceManager } from "./SourceManager";
 
 export function Editor() {
   const words = useEditorStore((state) => state.words);
@@ -24,6 +25,8 @@ export function Editor() {
   const future = useEditorStore((state) => state.future);
   const selected = useEditorStore((state) => state.selectedWordIds);
   const mediaName = useEditorStore((state) => state.mediaName);
+  const projectTitle = useEditorStore((state) => state.projectTitle);
+  const sourceCount = useEditorStore((state) => state.mediaSources.length);
   const exportRequest = useEditorStore((state) => state.exportRequest);
   const transcription = useEditorStore((state) => state.transcription);
   const undo = useEditorStore((state) => state.undo);
@@ -64,6 +67,9 @@ export function Editor() {
           return;
         }
         if (!state.mediaFile) throw new Error("Import the source media before rendering MP4 or MP3.");
+        if (state.mediaSources.length > 1) {
+          throw new Error("Multicam MP4/MP3 rendering belongs to the media worker. The source-aware edit plan and SRT export are ready.");
+        }
         const blob = await renderCutMedia({
           file: state.mediaFile,
           kind: state.mediaKind,
@@ -94,7 +100,7 @@ export function Editor() {
     <main className="editor-shell">
       <header className="topbar">
         <Link className="brand-lockup" href="/" aria-label="OpenCast home"><span className="brand-mark">◒</span><span>OpenCast</span></Link>
-        <div className="project-name"><span className="project-dot" />{mediaName || "Untitled transcript"}<small>{transcription.stage === "complete" ? "cloud transcript + speakers" : "cloud project"}</small></div>
+        <div className="project-name"><span className="project-dot" />{projectTitle || mediaName || "Untitled transcript"}<small>{sourceCount > 1 ? `${sourceCount} synchronized sources` : transcription.stage === "complete" ? "cloud transcript + speakers" : "cloud project"}</small></div>
         <div className="topbar-actions">
           <button type="button" className="toolbar-button" onClick={() => undo()} disabled={!history.length}><Undo2 size={16} /> Undo</button>
           <button type="button" className="toolbar-button" onClick={() => redo()} disabled={!future.length}><Redo2 size={16} /> Redo</button>
@@ -109,10 +115,11 @@ export function Editor() {
           <TranscriptPanel cuts={cuts} />
         </div>
         <div className="workspace-side">
+          <SourceManager />
           <AgentActivityPanel webMcpAvailable={webMcpAvailable} />
           <ExportDialog />
           <div className="editing-tip"><Scissors size={15} /><span><strong>Shared action hub</strong> — every UI action and WebMCP tool calls the same edit engine.</span></div>
-          <div className="project-summary"><span>{words.length} words</span><span>{formatTime(duration)} original</span><span>{formatTime(Math.max(0, duration - cuts.reduce((sum, cut) => sum + cut.end - cut.start, 0)))} final</span></div>
+          <div className="project-summary"><span>{words.length} words</span><span>{sourceCount} source{sourceCount === 1 ? "" : "s"}</span><span>{formatTime(duration)} master</span><span>{formatTime(Math.max(0, duration - cuts.reduce((sum, cut) => sum + cut.end - cut.start, 0)))} final</span></div>
         </div>
       </div>
     </main>

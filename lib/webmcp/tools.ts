@@ -1,4 +1,6 @@
 import type { useEditorStore } from "@/lib/store";
+import { SOURCE_ROLES, sourceForTime } from "@/lib/multicam";
+import type { Speaker, SpeakerTurn, Word } from "@/lib/types";
 
 type Store = typeof useEditorStore;
 type ToolArgs = Record<string, unknown>;
@@ -25,12 +27,17 @@ function numberArg(value: unknown, fallback?: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function mediaWorkerUrl(): string | null {
+  const value = process.env.NEXT_PUBLIC_OPENCAST_MEDIA_WORKER_URL?.replace(/\/$/, "");
+  return value || null;
+}
+
 export function buildWebMCPTools(store: Store): WebMCPTool[] {
   const state = () => store.getState();
   const run = (name: string, operation: (args: ToolArgs) => unknown): ((args: ToolArgs) => Promise<ToolResult>) =>
     async (args) => {
       try {
-        const data = operation(args);
+        const data = await operation(args);
         const detail = typeof data === "object" && data && "message" in data
           ? String((data as { message: unknown }).message)
           : "Completed";
@@ -46,19 +53,167 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
   return [
     {
       name: "get_project_state",
-      description: "Read OpenCast's current media, timing, cut, and speaker state before editing.",
+      description: "Read OpenCast's current sources, master timeline, cuts, program angle selections, and speakers before editing.",
       inputSchema: objectSchema(),
       execute: run("get_project_state", () => state().getProjectState()),
     },
     {
+      name: "create_multicam_project",
+      description: "Name the current OpenCast project before adding host, guest, screen, or B-roll sources. This does not delete existing project data.",
+      inputSchema: objectSchema({ title: { type: "string", minLength: 1, maxLength: 120 } }),
+      execute: run("create_multicam_project", (args) => {
+        const title = typeof args.title === "string" ? args.title : undefined;
+        state().createMulticamProject(title);
+        return { projectTitle: state().projectTitle, revision: state().projectRevision, message: "Prepared the multicam project." };
+      }),
+    },
+    {
+      name: "request_source_upload",
+      description: "Prepare source slots and direct the person to choose their local audio/video files in OpenCast. This tool never reads files from the computer or receives media bytes.",
+      inputSchema: objectSchema({ roles: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", enum: SOURCE_ROLES } } }),
+      execute: run("request_source_upload", (args) => {
+        const requested = Array.isArray(args.roles)
+          ? args.roles.filter((role): role is typeof SOURCE_ROLES[number] => typeof role === "string" && SOURCE_ROLES.includes(role as typeof SOURCE_ROLES[number]))
+          : [];
+        const request = state().requestSourceUpload(requested.length ? requested : ["host", "guest"]);
+        if (!request) throw new Error("Could not prepare source upload slots.");
+        return {
+          requestId: request.id,
+          roles: request.roles,
+          nextStep: "The local file chooser is ready in OpenCast. Ask the person to choose the matching files, or use normal browser interaction if available.",
+          message: "Prepared source upload slots.",
+        };
+      }),
+    },
+    {
+      name: "list_sources",
+      description: "List all independently recorded sources, their roles, upload/transcript status, durations, and master-timeline sync offsets.",
+      inputSchema: objectSchema(),
+      execute: run("list_sources", () => ({
+        activeSourceId: state().activeSourceId,
+        sources: state().mediaSources.map(({ id, name, role, kind, duration, syncOffset, status, uploadProgress, error }) => ({ id, name, role, kind, duration, syncOffset, status, uploadProgress, error })),
+      })),
+    },
+    {
+      name: "set_active_source",
+      description: "Select one source in the live editor so its transcript and angle preview are visible to the person.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 } }, ["source_id"]),
+      execute: run("set_active_source", (args) => ({ selected: state().setActiveSource(String(args.source_id ?? "")), activeSourceId: state().activeSourceId, message: "Selected source in the editor." })),
+    },
+    {
+      name: "set_source_role",
+      description: "Label a source as host, guest, screen, b-roll, or other. This changes organization only, not media timing.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 }, role: { type: "string", enum: SOURCE_ROLES } }, ["source_id", "role"]),
+      execute: run("set_source_role", (args) => ({ updated: state().setSourceRole(String(args.source_id ?? ""), args.role as typeof SOURCE_ROLES[number]), message: "Updated source role." })),
+    },
+    {
+      name: "sync_source",
+      description: "Set a source's manual sync offset in seconds on the master timeline. Positive moves it later; negative moves it earlier. Existing source transcript words are remapped without losing native timestamps.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 }, offset_seconds: { type: "number", minimum: -86400, maximum: 86400 } }, ["source_id", "offset_seconds"]),
+      execute: run("sync_source", (args) => ({ synchronized: state().setSourceSyncOffset(String(args.source_id ?? ""), numberArg(args.offset_seconds, Number.NaN) ?? Number.NaN), message: "Updated source sync offset." })),
+    },
+    {
+      name: "queue_source_ingest",
+      description: "Queue a directly stored large source in the configured OpenCast media worker. It downloads the project source, derives small audio segments, and sends those segments to OpenAI for timed transcription. Use only after confirming this external processing is wanted.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 } }, ["source_id"]),
+      execute: run("queue_source_ingest", async (args) => {
+        const source = state().mediaSources.find((item) => item.id === String(args.source_id ?? ""));
+        const baseUrl = mediaWorkerUrl();
+        if (!source?.storageUrl) throw new Error("That source must finish direct storage before it can be queued.");
+        if (!baseUrl) throw new Error("This OpenCast deployment has no media worker URL configured.");
+        const response = await fetch(`${baseUrl}/jobs`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sourceUrl: source.storageUrl, sourceId: source.id, filename: source.name }),
+        });
+        const payload = await response.json() as { id?: unknown; error?: unknown };
+        if (!response.ok || typeof payload.id !== "string") throw new Error(typeof payload.error === "string" ? payload.error : "Media worker did not create a job.");
+        state().updateMediaSource(source.id, { status: "transcribing", ingestJobId: payload.id, error: null });
+        return { sourceId: source.id, jobId: payload.id, message: "Queued source ingest. Poll get_source_ingest_status for the result." };
+      }),
+    },
+    {
+      name: "get_source_ingest_status",
+      description: "Read a queued large-source media-worker job. When it is complete, OpenCast applies the returned source transcript to the live project automatically.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 } }, ["source_id"]),
+      execute: run("get_source_ingest_status", async (args) => {
+        const source = state().mediaSources.find((item) => item.id === String(args.source_id ?? ""));
+        const baseUrl = mediaWorkerUrl();
+        if (!source?.ingestJobId) throw new Error("That source has no queued media-worker job.");
+        if (!baseUrl) throw new Error("This OpenCast deployment has no media worker URL configured.");
+        const response = await fetch(`${baseUrl}/jobs/${encodeURIComponent(source.ingestJobId)}`, { cache: "no-store" });
+        const payload = await response.json() as { status?: unknown; progress?: unknown; error?: unknown; result?: { words?: unknown; speakers?: unknown; speakerTurns?: unknown } };
+        if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : "Media worker status is unavailable.");
+        if (payload.status === "complete" && Array.isArray(payload.result?.words) && Array.isArray(payload.result?.speakers) && Array.isArray(payload.result?.speakerTurns)) {
+          state().loadSourceTranscript(source.id, payload.result.words as Word[], payload.result.speakers as Speaker[]);
+          state().setSpeakerTurns(payload.result.speakerTurns as SpeakerTurn[]);
+          return { sourceId: source.id, status: "complete", words: payload.result.words.length, message: "Applied the finished source transcript to the live project." };
+        }
+        if (payload.status === "error") {
+          const message = typeof payload.error === "string" ? payload.error : "Media worker failed.";
+          state().updateMediaSource(source.id, { status: "error", error: message });
+          throw new Error(message);
+        }
+        return { sourceId: source.id, status: payload.status ?? "queued", progress: typeof payload.progress === "number" ? payload.progress : 0, message: "Source ingest is still running." };
+      }),
+    },
+    {
       name: "get_transcript",
-      description: "Read the time-coded transcript. Set include_deleted true to include text already cut.",
+      description: "Read the master-timeline transcript across sources. Set include_deleted true to include text already cut.",
       inputSchema: objectSchema({ include_deleted: { type: "boolean" } }),
       execute: run("get_transcript", (args) => ({
         words: state().words
           .filter((word) => Boolean(args.include_deleted) || !word.deleted)
-          .map(({ id, text, start, end, speaker, deleted }) => ({ id, text, start, end, speaker, deleted })),
+          .map(({ id, text, start, end, speaker, deleted, sourceId, sourceStart, sourceEnd }) => ({ id, text, start, end, speaker, deleted, sourceId: sourceId ?? null, sourceStart: sourceStart ?? start, sourceEnd: sourceEnd ?? end })),
       })),
+    },
+    {
+      name: "get_source_transcript",
+      description: "Read one source's transcript with both native source times and synchronized master times. Use this when choosing host/guest program cuts.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 }, include_deleted: { type: "boolean" } }, ["source_id"]),
+      execute: run("get_source_transcript", (args) => {
+        const sourceId = String(args.source_id ?? "");
+        const source = state().mediaSources.find((item) => item.id === sourceId);
+        if (!source) throw new Error("That source is not in this project.");
+        return {
+          source: { id: source.id, name: source.name, role: source.role, syncOffset: source.syncOffset },
+          words: state().words.filter((word) => word.sourceId === sourceId && (Boolean(args.include_deleted) || !word.deleted)).map((word) => ({
+            id: word.id, text: word.text, masterStart: word.start, masterEnd: word.end,
+            sourceStart: word.sourceStart ?? word.start, sourceEnd: word.sourceEnd ?? word.end,
+            speaker: word.speaker, deleted: word.deleted,
+          })),
+        };
+      }),
+    },
+    {
+      name: "propose_program_cut",
+      description: "Validate and describe a proposed visible-angle cut on the master timeline without changing the project. Call apply_program_cut only after the person approves it.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 }, start: { type: "number", minimum: 0 }, end: { type: "number", minimum: 0 } }, ["source_id", "start", "end"]),
+      execute: run("propose_program_cut", (args) => {
+        const sourceId = String(args.source_id ?? "");
+        const start = numberArg(args.start, Number.NaN) ?? Number.NaN;
+        const end = numberArg(args.end, Number.NaN) ?? Number.NaN;
+        const source = state().mediaSources.find((item) => item.id === sourceId);
+        if (!source || !Number.isFinite(start) || !Number.isFinite(end) || end - start < 0.04) throw new Error("Choose an existing source and a valid program range.");
+        return {
+          source: { id: source.id, name: source.name, role: source.role },
+          range: { start, end },
+          sourceIsAvailable: sourceForTime(state().mediaSources, sourceId, start) && sourceForTime(state().mediaSources, sourceId, Math.max(start, end - 0.001)),
+          expectedRevision: state().projectRevision,
+          message: "Proposal is ready for review; it has not changed the program timeline.",
+        };
+      }),
+    },
+    {
+      name: "apply_program_cut",
+      description: "Choose which source is visible for a master-timeline range. Supply expected_revision from propose_program_cut or get_project_state to avoid overwriting a newer live edit.",
+      inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 }, start: { type: "number", minimum: 0 }, end: { type: "number", minimum: 0 }, expected_revision: { type: "integer", minimum: 0 } }, ["source_id", "start", "end", "expected_revision"]),
+      execute: run("apply_program_cut", (args) => state().applyProgramCut(
+        String(args.source_id ?? ""),
+        numberArg(args.start, Number.NaN) ?? Number.NaN,
+        numberArg(args.end, Number.NaN) ?? Number.NaN,
+        Number(args.expected_revision),
+      )),
     },
     {
       name: "find_in_transcript",

@@ -30,7 +30,7 @@ export function useTranscriber() {
     });
   }, []);
 
-  const transcribe = useCallback(async (file: File) => {
+  const transcribe = useCallback(async (file: File, sourceId?: string) => {
     cancel();
     const jobId = crypto.randomUUID();
     const controller = new AbortController();
@@ -43,6 +43,7 @@ export function useTranscriber() {
       message: "Uploading media for cloud transcription…",
       error: null,
     });
+    if (sourceId) useEditorStore.getState().updateMediaSource(sourceId, { status: "transcribing", error: null });
 
     try {
       const form = new FormData();
@@ -54,7 +55,8 @@ export function useTranscriber() {
       if (activeJobRef.current !== jobId) return;
 
       const editor = useEditorStore.getState();
-      editor.loadTranscript(payload.words, payload.speakers);
+      if (sourceId) editor.loadSourceTranscript(sourceId, payload.words, payload.speakers);
+      else editor.loadTranscript(payload.words, payload.speakers);
       editor.setSpeakerTurns(payload.speakerTurns);
       editor.setTranscriptionProgress({
         stage: "complete",
@@ -72,6 +74,7 @@ export function useTranscriber() {
           message: "Cloud transcription needs attention.",
           error: message,
         });
+        if (sourceId) useEditorStore.getState().updateMediaSource(sourceId, { status: "error", error: message });
         useEditorStore.getState().addActivity("cloud_transcription", message, "error");
       }
     } finally {

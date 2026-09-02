@@ -18,7 +18,7 @@ async function run() {
   await Promise.resolve();
 
   assert.equal(registration.available, true);
-  assert.ok(calls.length >= 14);
+  assert.ok(calls.length >= 22);
   assert.ok(calls.every(({ signal }) => signal instanceof AbortSignal));
 
   useEditorStore.getState().loadTranscript([
@@ -30,6 +30,29 @@ async function run() {
   const response = await tool.execute({});
   assert.match(response.content[0].text, /"removed":1/);
   assert.equal(useEditorStore.getState().words[0].deleted, true);
+
+  const sourceId = useEditorStore.getState().addMediaSource({
+    name: "guest-angle.mp4",
+    role: "guest",
+    kind: "video",
+    duration: 12,
+    file: null,
+    localUrl: null,
+  });
+  const requestUpload = calls.find(({ tool }) => tool.name === "request_source_upload")!.tool;
+  const requestResponse = await requestUpload.execute({ roles: ["host", "guest"] });
+  assert.match(requestResponse.content[0].text, /"requestId"/);
+  assert.deepEqual(useEditorStore.getState().sourceUploadRequest?.roles, ["host", "guest"]);
+
+  const sourceTranscript = calls.find(({ tool }) => tool.name === "get_source_transcript")!.tool;
+  const sourceResponse = await sourceTranscript.execute({ source_id: sourceId });
+  assert.match(sourceResponse.content[0].text, /"words":\[\]/);
+
+  const revision = useEditorStore.getState().projectRevision;
+  const programCut = calls.find(({ tool }) => tool.name === "apply_program_cut")!.tool;
+  const programResponse = await programCut.execute({ source_id: sourceId, start: 0.8, end: 1.8, expected_revision: revision });
+  assert.match(programResponse.content[0].text, /"ok":true/);
+  assert.equal(useEditorStore.getState().programSegments.some((segment) => segment.sourceId === sourceId && segment.start === 0.8 && segment.end === 1.8), true);
 
   registration.dispose();
   assert.equal(calls[0].signal?.aborted, true);

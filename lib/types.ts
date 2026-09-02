@@ -12,6 +12,11 @@ export type Word = {
   end: number;
   speaker: number;
   deleted: boolean;
+  /** Present when a word originated in an independently recorded source. */
+  sourceId?: string;
+  /** Native time in that source; start/end remain on the master timeline. */
+  sourceStart?: number;
+  sourceEnd?: number;
 };
 
 export type ManualCut = TimeRange & {
@@ -65,6 +70,7 @@ export type EditorSnapshot = {
   manualCuts: ManualCut[];
   sceneBoundaries: SceneBoundary[];
   speakers: Speaker[];
+  programSegments: import("./multicam").ProgramSegment[];
 };
 
 export type TranscriptMatch = {

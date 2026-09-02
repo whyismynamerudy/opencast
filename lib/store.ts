@@ -2,6 +2,17 @@ import { create } from "zustand";
 import { getClipSegments, getCutRanges, getKeepRanges, editedDuration } from "./edits";
 import { fillerWordIds, normalizeToken } from "./fillers";
 import { detectSilences } from "./silences";
+import {
+  applyProgramCut,
+  makeSourceWord,
+  projectDuration,
+  remapSourceWords,
+  sourceForTime,
+  type MediaSource,
+  type ProgramSegment,
+  type SourceRole,
+  type SourceUploadRequest,
+} from "./multicam";
 import type {
   AgentActivity,
   ClipSegment,
@@ -19,6 +30,12 @@ import type {
 } from "./types";
 
 type EditorState = {
+  projectTitle: string;
+  projectRevision: number;
+  mediaSources: MediaSource[];
+  activeSourceId: string | null;
+  programSegments: ProgramSegment[];
+  sourceUploadRequest: SourceUploadRequest;
   mediaFile: File | null;
   mediaUrl: string | null;
   mediaName: string;
@@ -39,6 +56,16 @@ type EditorState = {
   exportError: string | null;
   transcription: TranscriptionState;
   setMedia: (file: File, url: string, duration: number) => void;
+  createMulticamProject: (title?: string) => void;
+  requestSourceUpload: (roles?: SourceRole[]) => SourceUploadRequest;
+  clearSourceUploadRequest: () => void;
+  addMediaSource: (input: Pick<MediaSource, "name" | "role" | "kind" | "duration" | "file" | "localUrl">) => string;
+  updateMediaSource: (sourceId: string, update: Partial<Omit<MediaSource, "id">>) => boolean;
+  setActiveSource: (sourceId: string) => boolean;
+  setSourceRole: (sourceId: string, role: SourceRole) => boolean;
+  setSourceSyncOffset: (sourceId: string, syncOffset: number) => boolean;
+  loadSourceTranscript: (sourceId: string, words: Word[], speakers: Speaker[]) => void;
+  applyProgramCut: (sourceId: string, start: number, end: number, expectedRevision?: number) => { ok: boolean; message: string; revision: number };
   loadTranscript: (words: Word[], speakers: Speaker[]) => void;
   setTranscriptionProgress: (update: Partial<Omit<TranscriptionState, "waveform" | "speakerTurns">>) => void;
   setWaveform: (waveform: number[]) => void;
@@ -73,12 +100,22 @@ type EditorState = {
 const MAX_HISTORY = 80;
 const SPEAKER_COLORS = ["#dd6953", "#6e9cdb", "#a477d4", "#d6a540", "#4da58a"];
 
-function cloneSnapshot(state: Pick<EditorState, "words" | "manualCuts" | "sceneBoundaries" | "speakers">): EditorSnapshot {
+function cloneSnapshot(state: Pick<EditorState, "words" | "manualCuts" | "sceneBoundaries" | "speakers" | "programSegments">): EditorSnapshot {
   return {
     words: state.words.map((word) => ({ ...word })),
     manualCuts: state.manualCuts.map((cut) => ({ ...cut })),
     sceneBoundaries: state.sceneBoundaries.map((boundary) => ({ ...boundary })),
     speakers: state.speakers.map((speaker) => ({ ...speaker })),
+    programSegments: state.programSegments.map((segment) => ({ ...segment })),
+  };
+}
+
+function activeSourceFields(source: MediaSource | undefined) {
+  return {
+    mediaFile: source?.file ?? null,
+    mediaUrl: source?.localUrl ?? source?.storageUrl ?? null,
+    mediaName: source?.name ?? "",
+    mediaKind: source?.kind ?? "video" as MediaKind,
   };
 }
 
@@ -122,10 +159,17 @@ export const useEditorStore = create<EditorState>((set, get) => {
       history: [...current.history, cloneSnapshot(current)].slice(-MAX_HISTORY),
       future: [],
       selectedWordIds: [],
+      projectRevision: current.projectRevision + 1,
     });
   };
 
   return {
+    projectTitle: "Untitled podcast",
+    projectRevision: 0,
+    mediaSources: [],
+    activeSourceId: null,
+    programSegments: [],
+    sourceUploadRequest: null,
     mediaFile: null,
     mediaUrl: null,
     mediaName: "",
@@ -153,26 +197,144 @@ export const useEditorStore = create<EditorState>((set, get) => {
       speakerTurns: [],
     },
 
-    setMedia: (file, url, duration) => set({
-      mediaFile: file,
-      mediaUrl: url,
-      mediaName: file.name,
-      mediaKind: file.type.startsWith("audio/") ? "audio" : "video",
-      duration,
-      playbackTime: 0,
-      isPlaying: false,
-      transcription: {
-        stage: "idle",
-        progress: 0,
-        message: "Media loaded. Preparing cloud transcription…",
+    setMedia: (file, url, duration) => {
+      const state = get();
+      const existing = state.mediaSources.find((source) => source.file === file || source.localUrl === url);
+      const sourceId = existing?.id ?? crypto.randomUUID();
+      const source: MediaSource = existing ?? {
+        id: sourceId,
+        name: file.name,
+        role: "host",
+        kind: file.type.startsWith("audio/") ? "audio" : "video",
+        duration,
+        syncOffset: 0,
+        status: "local",
+        uploadProgress: 0,
+        file,
+        localUrl: url,
+        storageUrl: null,
+        storagePath: null,
+        ingestJobId: null,
         error: null,
-        waveform: [],
-        speakerTurns: [],
-      },
-    }),
+      };
+      const mediaSources = existing
+        ? state.mediaSources.map((item) => item.id === sourceId ? { ...item, file, localUrl: url, duration } : item)
+        : [...state.mediaSources, source];
+      set({
+        mediaSources,
+        activeSourceId: sourceId,
+        ...activeSourceFields({ ...source, file, localUrl: url, duration }),
+        duration: Math.max(state.duration, duration),
+        programSegments: state.programSegments.length ? state.programSegments : [{ id: crypto.randomUUID(), sourceId, start: 0, end: duration }],
+        playbackTime: 0,
+        isPlaying: false,
+        projectRevision: state.projectRevision + 1,
+        transcription: {
+          stage: "idle",
+          progress: 0,
+          message: "Media loaded. Preparing cloud transcription…",
+          error: null,
+          waveform: [],
+          speakerTurns: [],
+        },
+      });
+    },
+
+    createMulticamProject: (title) => set((state) => ({
+      projectTitle: title?.trim() || state.projectTitle || "Untitled podcast",
+      projectRevision: state.projectRevision + 1,
+    })),
+
+    requestSourceUpload: (roles = ["host", "guest"]) => {
+      const request = { id: crypto.randomUUID(), roles, createdAt: Date.now() } satisfies NonNullable<SourceUploadRequest>;
+      set((state) => ({ sourceUploadRequest: request, projectRevision: state.projectRevision + 1 }));
+      return request;
+    },
+
+    clearSourceUploadRequest: () => set({ sourceUploadRequest: null }),
+
+    addMediaSource: (input) => {
+      const state = get();
+      const id = crypto.randomUUID();
+      const source: MediaSource = {
+        id,
+        name: input.name,
+        role: input.role,
+        kind: input.kind,
+        duration: input.duration,
+        syncOffset: 0,
+        status: "local",
+        uploadProgress: 0,
+        file: input.file,
+        localUrl: input.localUrl,
+        storageUrl: null,
+        storagePath: null,
+        ingestJobId: null,
+        error: null,
+      };
+      const mediaSources = [...state.mediaSources, source];
+      const isFirst = !state.activeSourceId;
+      set({
+        mediaSources,
+        ...(isFirst ? activeSourceFields(source) : {}),
+        activeSourceId: isFirst ? source.id : state.activeSourceId,
+        mediaName: isFirst ? source.name : state.mediaName,
+        duration: projectDuration(mediaSources, state.words),
+        projectTitle: state.mediaSources.length || state.projectTitle !== "Untitled podcast"
+          ? state.projectTitle
+          : source.name.replace(/\.[^.]+$/, ""),
+        programSegments: state.programSegments.length || !source.duration
+          ? state.programSegments
+          : [{ id: crypto.randomUUID(), sourceId: source.id, start: 0, end: source.duration }],
+        projectRevision: state.projectRevision + 1,
+      });
+      return id;
+    },
+
+    updateMediaSource: (sourceId, update) => {
+      const state = get();
+      const source = state.mediaSources.find((item) => item.id === sourceId);
+      if (!source) return false;
+      const nextSource = { ...source, ...update };
+      const mediaSources = state.mediaSources.map((item) => item.id === sourceId ? nextSource : item);
+      set({
+        mediaSources,
+        ...(state.activeSourceId === sourceId ? activeSourceFields(nextSource) : {}),
+        duration: projectDuration(mediaSources, state.words),
+        projectRevision: state.projectRevision + 1,
+      });
+      return true;
+    },
+
+    setActiveSource: (sourceId) => {
+      const state = get();
+      const source = state.mediaSources.find((item) => item.id === sourceId);
+      if (!source) return false;
+      set({ activeSourceId: sourceId, ...activeSourceFields(source), projectRevision: state.projectRevision + 1 });
+      return true;
+    },
+
+    setSourceRole: (sourceId, role) => get().updateMediaSource(sourceId, { role }),
+
+    setSourceSyncOffset: (sourceId, syncOffset) => {
+      if (!Number.isFinite(syncOffset)) return false;
+      const state = get();
+      const source = state.mediaSources.find((item) => item.id === sourceId);
+      if (!source) return false;
+      const mediaSources = state.mediaSources.map((item) => item.id === sourceId ? { ...item, syncOffset } : item);
+      const words = remapSourceWords(state.words, sourceId, syncOffset);
+      set({
+        mediaSources,
+        words,
+        duration: projectDuration(mediaSources, words),
+        projectRevision: state.projectRevision + 1,
+      });
+      return true;
+    },
 
     loadTranscript: (words, speakers) => {
-      const duration = Math.max(get().duration, words.at(-1)?.end ?? 0);
+      const current = get();
+      const duration = Math.max(current.duration, words.at(-1)?.end ?? 0);
       const normalizedSpeakers = speakers.length
         ? speakers
         : [{ id: 0, name: "Speaker 1", color: SPEAKER_COLORS[0] }];
@@ -185,8 +347,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
         selectedWordIds: [],
         history: [],
         future: [],
+        programSegments: current.programSegments.length || !duration
+          ? current.programSegments
+          : current.activeSourceId
+            ? [{ id: crypto.randomUUID(), sourceId: current.activeSourceId, start: 0, end: duration }]
+            : [],
+        projectRevision: current.projectRevision + 1,
         transcription: {
-          ...get().transcription,
+          ...current.transcription,
           stage: "complete",
           progress: 1,
           message: "Transcript ready.",
@@ -194,6 +362,78 @@ export const useEditorStore = create<EditorState>((set, get) => {
           speakerTurns: [],
         },
       });
+    },
+
+    loadSourceTranscript: (sourceId, words, speakers) => {
+      const state = get();
+      const source = state.mediaSources.find((item) => item.id === sourceId);
+      if (!source) return;
+      const takenSpeakerIds = new Set(state.speakers.map((speaker) => speaker.id));
+      let nextSpeakerId = state.speakers.reduce((highest, speaker) => Math.max(highest, speaker.id), -1) + 1;
+      const speakerMap = new Map<number, number>();
+      const sourceSpeakers: Speaker[] = [];
+      for (const detected of speakers.length ? speakers : [{ id: 0, name: "Speaker 1", color: SPEAKER_COLORS[0] }]) {
+        const existing = state.speakers.find((speaker) => speaker.name === `${source.name} · ${detected.name}`);
+        const id = existing?.id ?? (() => {
+          while (takenSpeakerIds.has(nextSpeakerId)) nextSpeakerId++;
+          takenSpeakerIds.add(nextSpeakerId);
+          return nextSpeakerId++;
+        })();
+        speakerMap.set(detected.id, id);
+        sourceSpeakers.push(existing ?? {
+          id,
+          name: `${source.name} · ${detected.name}`,
+          color: detected.color || SPEAKER_COLORS[id % SPEAKER_COLORS.length],
+        });
+      }
+      const sourceWords = words.map((word) => makeSourceWord({
+        ...word,
+        speaker: speakerMap.get(word.speaker) ?? sourceSpeakers[0].id,
+      }, sourceId, source.syncOffset));
+      const remaining = state.words.filter((word) => word.sourceId !== sourceId);
+      const nextWords = [...remaining, ...sourceWords].sort((a, b) => a.start - b.start);
+      const nextSources = state.mediaSources.map((item) => item.id === sourceId ? { ...item, status: "ready" as const, error: null } : item);
+      const nextDuration = projectDuration(nextSources, nextWords);
+      set({
+        words: nextWords,
+        speakers: [...state.speakers.filter((speaker) => !speaker.name.startsWith(`${source.name} · `)), ...sourceSpeakers],
+        mediaSources: nextSources,
+        duration: nextDuration,
+        programSegments: state.programSegments.length || !nextDuration
+          ? state.programSegments
+          : [{ id: crypto.randomUUID(), sourceId, start: 0, end: nextDuration }],
+        selectedWordIds: [],
+        history: [],
+        future: [],
+        projectRevision: state.projectRevision + 1,
+        transcription: {
+          ...state.transcription,
+          stage: "complete",
+          progress: 1,
+          message: `${source.name} is ready in the master transcript.`,
+          error: null,
+          speakerTurns: [],
+        },
+      });
+    },
+
+    applyProgramCut: (sourceId, start, end, expectedRevision) => {
+      const state = get();
+      if (expectedRevision !== undefined && expectedRevision !== state.projectRevision) {
+        return { ok: false, revision: state.projectRevision, message: "The project changed; read its latest state before applying this angle cut." };
+      }
+      if (!state.mediaSources.some((source) => source.id === sourceId)) {
+        return { ok: false, revision: state.projectRevision, message: "That source is not in this project." };
+      }
+      if (start < 0 || end > state.duration + 0.04 || end - start < 0.04) {
+        return { ok: false, revision: state.projectRevision, message: "Choose a valid master-timeline range for the angle cut." };
+      }
+      if (!sourceForTime(state.mediaSources, sourceId, start) || !sourceForTime(state.mediaSources, sourceId, Math.max(start, end - 0.001))) {
+        return { ok: false, revision: state.projectRevision, message: "That source does not cover the entire requested master-timeline range." };
+      }
+      const programSegments = applyProgramCut(state.programSegments, { sourceId, start, end }, () => crypto.randomUUID());
+      set({ programSegments, projectRevision: state.projectRevision + 1 });
+      return { ok: true, revision: state.projectRevision + 1, message: "Updated the program angle selection." };
     },
 
     setTranscriptionProgress: (update) => set((state) => ({ transcription: { ...state.transcription, ...update } })),
@@ -309,6 +549,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         history: state.history.slice(0, -1),
         future: [cloneSnapshot(state), ...state.future].slice(0, MAX_HISTORY),
         selectedWordIds: [],
+        projectRevision: state.projectRevision + 1,
       });
       return true;
     },
@@ -322,6 +563,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         history: [...state.history, cloneSnapshot(state)].slice(-MAX_HISTORY),
         future: state.future.slice(1),
         selectedWordIds: [],
+        projectRevision: state.projectRevision + 1,
       });
       return true;
     },
@@ -358,7 +600,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
       const cuts = state.getCutRanges();
       const duration = state.duration;
       return {
-        status: state.words.length ? "ready" : state.mediaFile ? "media-loaded" : "empty",
+        status: state.words.length ? "ready" : state.mediaSources.length ? "sources-loaded" : "empty",
+        projectTitle: state.projectTitle,
+        revision: state.projectRevision,
         mediaName: state.mediaName || null,
         mediaKind: state.mediaKind,
         duration,
@@ -368,6 +612,21 @@ export const useEditorStore = create<EditorState>((set, get) => {
         speakers: state.speakers.map(({ id, name }) => ({ id, name })),
         clipCount: state.getClips().length,
         cutCount: cuts.length,
+        sourceCount: state.mediaSources.length,
+        activeSourceId: state.activeSourceId,
+        sources: state.mediaSources.map((source) => ({
+          id: source.id,
+          name: source.name,
+          role: source.role,
+          kind: source.kind,
+          duration: source.duration,
+          syncOffset: source.syncOffset,
+          status: source.status,
+          uploadProgress: source.uploadProgress,
+          hasCloudCopy: Boolean(source.storageUrl),
+          ingestJobId: source.ingestJobId,
+        })),
+        programSegments: state.programSegments.map((segment) => ({ ...segment })),
         transcription: {
           stage: state.transcription.stage,
           progress: state.transcription.progress,

@@ -8,6 +8,8 @@ import type { TimeRange } from "@/lib/types";
 export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   const words = useEditorStore((state) => state.words);
   const speakers = useEditorStore((state) => state.speakers);
+  const activeSourceId = useEditorStore((state) => state.activeSourceId);
+  const activeSourceName = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId)?.name);
   const selected = useEditorStore((state) => state.selectedWordIds);
   const time = useEditorStore((state) => state.playbackTime);
   const toggle = useEditorStore((state) => state.toggleSelectedWord);
@@ -17,13 +19,17 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   const removeFillers = useEditorStore((state) => state.removeFillers);
   const removeSilences = useEditorStore((state) => state.removeSilences);
 
-  const selectedDeleted = words.filter((word) => selected.includes(word.id) && word.deleted).length;
+  const hasActiveSourceTranscript = Boolean(activeSourceId && words.some((word) => word.sourceId === activeSourceId));
+  const sourceWords = activeSourceId && hasActiveSourceTranscript
+    ? words.filter((word) => word.sourceId === activeSourceId)
+    : words;
+  const selectedDeleted = sourceWords.filter((word) => selected.includes(word.id) && word.deleted).length;
   const action = () => selectedDeleted === selected.length ? restoreWords(selected) : deleteWords(selected);
 
   return (
     <section className="transcript-panel">
       <header className="transcript-header">
-        <div><p className="panel-kicker">TRANSCRIPT</p><h2>Edit the words. The recording follows.</h2></div>
+        <div><p className="panel-kicker">{activeSourceName ? `TRANSCRIPT · ${activeSourceName}` : "TRANSCRIPT"}</p><h2>Edit the words. The recording follows.</h2></div>
         <button type="button" className="icon-button" aria-label="Search transcript"><Search size={17} /></button>
       </header>
       <div className="quick-actions">
@@ -32,9 +38,9 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
         <button type="button" onClick={action} disabled={!selected.length}>{selectedDeleted === selected.length ? <RotateCcw size={14} /> : <Scissors size={14} />}{selectedDeleted === selected.length ? "Restore" : "Cut"} selection</button>
       </div>
       <div className="transcript-scroll">
-        {words.map((word, index) => {
+        {sourceWords.map((word, index) => {
           const speaker = speakers.find((item) => item.id === word.speaker);
-          const startsTurn = index === 0 || words[index - 1].speaker !== word.speaker;
+          const startsTurn = index === 0 || sourceWords[index - 1].speaker !== word.speaker;
           const active = time >= word.start && time <= word.end;
           const cut = isWordCut(word, cuts);
           return (
@@ -44,7 +50,7 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
                 type="button"
                 className={`transcript-word ${selected.includes(word.id) ? "selected" : ""} ${cut ? "cut" : ""} ${active ? "active" : ""}`}
                 onClick={() => { toggle(word.id); setTime(word.start); }}
-                title={`${word.start.toFixed(2)}s`}
+                title={`${word.start.toFixed(2)}s master${word.sourceStart !== undefined ? ` · ${word.sourceStart.toFixed(2)}s source` : ""}`}
               >{word.text}</button>
             </span>
           );

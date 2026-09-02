@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Pause, Play } from "lucide-react";
 import { rangeAt } from "@/lib/edits";
+import { masterToSourceTime, sourceToMasterTime } from "@/lib/multicam";
 import { useEditorStore } from "@/lib/store";
 import type { TimeRange } from "@/lib/types";
 
@@ -10,6 +11,8 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const mediaUrl = useEditorStore((state) => state.mediaUrl);
   const mediaKind = useEditorStore((state) => state.mediaKind);
   const mediaName = useEditorStore((state) => state.mediaName);
+  const activeSourceId = useEditorStore((state) => state.activeSourceId);
+  const activeSource = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId));
   const time = useEditorStore((state) => state.playbackTime);
   const isPlaying = useEditorStore((state) => state.isPlaying);
   const setPlaybackTime = useEditorStore((state) => state.setPlaybackTime);
@@ -18,9 +21,10 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
 
   useEffect(() => {
     const media = mediaRef.current;
-    if (!media || Math.abs(media.currentTime - time) < 0.3) return;
-    media.currentTime = time;
-  }, [time]);
+    const sourceTime = masterToSourceTime(time, activeSource?.syncOffset);
+    if (!media || Math.abs(media.currentTime - sourceTime) < 0.3) return;
+    media.currentTime = sourceTime;
+  }, [activeSource?.syncOffset, time]);
 
   useEffect(() => {
     const media = mediaRef.current;
@@ -34,14 +38,15 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
     if (!media || !isPlaying) return;
     let frame = 0;
     const advance = () => {
-      const cut = rangeAt(media.currentTime, cuts);
-      if (cut) media.currentTime = Math.min(media.duration || cut.end, cut.end + 0.006);
-      setPlaybackTime(media.currentTime);
+      const masterTime = sourceToMasterTime(media.currentTime, activeSource?.syncOffset);
+      const cut = rangeAt(masterTime, cuts);
+      if (cut) media.currentTime = Math.min(media.duration || cut.end, masterToSourceTime(cut.end + 0.006, activeSource?.syncOffset));
+      setPlaybackTime(sourceToMasterTime(media.currentTime, activeSource?.syncOffset));
       frame = requestAnimationFrame(advance);
     };
     frame = requestAnimationFrame(advance);
     return () => cancelAnimationFrame(frame);
-  }, [cuts, isPlaying, setPlaybackTime]);
+  }, [activeSource?.syncOffset, cuts, isPlaying, setPlaybackTime]);
 
   if (!mediaUrl) {
     return <section className="preview empty-preview"><span className="preview-orb">◒</span><p>Import matching media to preview the edit.</p><small>The transcript editor is already ready.</small></section>;
@@ -50,7 +55,7 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const shared = {
     ref: mediaRef as React.RefObject<HTMLVideoElement> & React.RefObject<HTMLAudioElement>,
     src: mediaUrl,
-    onTimeUpdate: () => setPlaybackTime(mediaRef.current?.currentTime ?? 0),
+    onTimeUpdate: () => setPlaybackTime(sourceToMasterTime(mediaRef.current?.currentTime ?? 0, activeSource?.syncOffset)),
     onEnded: () => setIsPlaying(false),
   };
 
@@ -63,7 +68,7 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
           {isPlaying ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}
         </button>
         <span>{formatTime(time)}</span>
-        <span className="muted">edited playback</span>
+        <span className="muted">{activeSourceId ? "angle preview · master time" : "edited playback"}</span>
       </div>
     </section>
   );
