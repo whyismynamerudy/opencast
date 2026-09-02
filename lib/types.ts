@@ -35,6 +35,31 @@ export type Speaker = {
   color: string;
 };
 
+export type SpeakerTurn = TimeRange & {
+  speaker: number;
+  confidence: number;
+};
+
+export type TranscriptionStage =
+  | "idle"
+  | "extracting"
+  | "voice_activity"
+  | "transcribing"
+  | "aligning"
+  | "diarizing"
+  | "finalizing"
+  | "complete"
+  | "error";
+
+export type TranscriptionState = {
+  stage: TranscriptionStage;
+  progress: number;
+  message: string;
+  error: string | null;
+  waveform: number[];
+  speakerTurns: SpeakerTurn[];
+};
+
 export type EditorSnapshot = {
   words: Word[];
   manualCuts: ManualCut[];

@@ -11,6 +11,7 @@ export function Timeline({ cuts, clips, words }: { cuts: TimeRange[]; clips: Cli
   const playbackTime = useEditorStore((state) => state.playbackTime);
   const setPlaybackTime = useEditorStore((state) => state.setPlaybackTime);
   const splitAt = useEditorStore((state) => state.splitAt);
+  const waveform = useEditorStore((state) => state.transcription.waveform);
   const editedSeconds = Math.max(0, duration - cuts.reduce((total, cut) => total + cut.end - cut.start, 0));
 
   const seek = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -28,7 +29,7 @@ export function Timeline({ cuts, clips, words }: { cuts: TimeRange[]; clips: Cli
       </div>
       <div className="ruler"><span>0:00</span><span>{formatTime(duration / 2)}</span><span>{formatTime(duration)}</span></div>
       <div className="timeline-track" role="slider" tabIndex={0} aria-label="Timeline" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={playbackTime} onClick={seek}>
-        <div className="timeline-base" />
+        <div className="timeline-base">{waveform.length > 0 && <div className="waveform" aria-hidden="true">{waveform.map((value, index) => <i key={index} style={{ height: `${Math.max(8, value * 100)}%` }} />)}</div>}</div>
         {clips.map((clip) => <div key={clip.id} className="clip-band" style={{ left: `${(clip.start / duration) * 100}%`, width: `${((clip.end - clip.start) / duration) * 100}%` }} />)}
         {cuts.map((cut, index) => <div key={`${cut.start}-${index}`} className="cut-band" style={{ left: `${(cut.start / duration) * 100}%`, width: `${((cut.end - cut.start) / duration) * 100}%` }} />)}
         <div className="word-lane">

@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { FileText, Film, LoaderCircle, Upload } from "lucide-react";
+import { FileText, Film, LoaderCircle, Mic2, Upload, X } from "lucide-react";
 import { parseTranscriptFile } from "@/lib/parseTranscript";
 import { useEditorStore } from "@/lib/store";
+import { useTranscriber } from "@/hooks/useTranscriber";
 
 const SAMPLE_TRANSCRIPT = `1
 00:00:00,000 --> 00:00:03,400
@@ -37,6 +38,9 @@ export function UploadScreen() {
   const setMedia = useEditorStore((state) => state.setMedia);
   const loadTranscript = useEditorStore((state) => state.loadTranscript);
   const addActivity = useEditorStore((state) => state.addActivity);
+  const mediaFile = useEditorStore((state) => state.mediaFile);
+  const transcription = useEditorStore((state) => state.transcription);
+  const { transcribe, cancel, running } = useTranscriber();
   const [busy, setBusy] = useState<"media" | "transcript" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,6 +54,7 @@ export function UploadScreen() {
       if (oldUrl?.startsWith("blob:")) URL.revokeObjectURL(oldUrl);
       setMedia(file, url, duration);
       addActivity("media_import", `Loaded ${file.name}.`, "success");
+      void transcribe(file);
     } catch (reason) {
       URL.revokeObjectURL(url);
       setError(reason instanceof Error ? reason.message : "Media import failed.");
@@ -91,7 +96,7 @@ export function UploadScreen() {
         <div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div>
         <p className="eyebrow">WEBMCP-NATIVE POST-PRODUCTION</p>
         <h1>Edit the recording by having a conversation.</h1>
-        <p className="welcome-copy">Bring a recording and its SRT, VTT, or JSON transcript. OpenCast turns every word into an editable part of the cut — ready for you or your agent co-editor.</p>
+        <p className="welcome-copy">Drop in a recording and OpenCast extracts audio, transcribes every word, refines cut points, and detects speakers — entirely in your browser. SRT, VTT, and JSON import stay available as a fallback.</p>
 
         <div className="upload-grid">
           <button className="upload-card" onClick={() => mediaInput.current?.click()} type="button">
@@ -110,11 +115,21 @@ export function UploadScreen() {
           <button className="text-button" type="button" onClick={loadSample} disabled={busy !== null}>Try the sample transcript <Upload size={14} /></button>
           <span>Everything stays in this browser.</span>
         </div>
+        {(running || transcription.stage === "error" || transcription.stage === "extracting") && (
+          <div className={`transcription-progress ${transcription.stage === "error" ? "error" : ""}`}>
+            <div className="transcription-progress-icon">{running ? <LoaderCircle className="spin" size={18} /> : <Mic2 size={18} />}</div>
+            <div>
+              <strong>{transcription.stage === "error" ? "On-device transcription needs attention" : transcription.message}</strong>
+              <span>{transcription.stage === "error" ? transcription.error : `${Math.round(transcription.progress * 100)}% · Silero VAD → Whisper → CTC → pyannote`}</span>
+            </div>
+            {running ? <button type="button" className="progress-action" onClick={cancel} aria-label="Cancel transcription"><X size={15} /></button> : mediaFile ? <button type="button" className="progress-action" onClick={() => void transcribe(mediaFile)}>Retry</button> : null}
+          </div>
+        )}
         {error && <p className="form-error">{error}</p>}
         <input ref={mediaInput} className="sr-only" type="file" accept="audio/*,video/*" onChange={(event) => event.target.files?.[0] && void loadMedia(event.target.files[0])} />
         <input ref={transcriptInput} className="sr-only" type="file" accept=".srt,.vtt,.json,application/json,text/vtt" onChange={(event) => event.target.files?.[0] && void loadTranscriptFile(event.target.files[0])} />
       </section>
-      <p className="welcome-footnote">Phase A · Transcript import, live editing engine, local export, and shared WebMCP tools.</p>
+      <p className="welcome-footnote">On-device pipeline · Silero VAD · Whisper word timestamps · CTC alignment · pyannote speaker turns.</p>
     </main>
   );
 }

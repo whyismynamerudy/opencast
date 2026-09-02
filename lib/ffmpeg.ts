@@ -3,6 +3,7 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import type { MediaKind, TimeRange } from "./types";
+import { TRANSCRIPTION_SAMPLE_RATE } from "./audio";
 
 let ffmpeg: FFmpeg | null = null;
 let loading: Promise<FFmpeg> | null = null;
@@ -62,6 +63,37 @@ export async function renderCutMedia({
     const ownedBytes = new Uint8Array(bytes.byteLength);
     ownedBytes.set(bytes);
     return new Blob([ownedBytes.buffer], { type: isAudio ? "audio/mpeg" : "video/mp4" });
+  } finally {
+    await engine.deleteFile(input).catch(() => undefined);
+    await engine.deleteFile(output).catch(() => undefined);
+  }
+}
+
+/** Decode any browser-supported audio/video file into mono 16 kHz Float32 PCM. */
+export async function extractMono16kPcm(
+  file: File,
+  onProgress?: (ratio: number) => void,
+): Promise<Float32Array> {
+  const engine = await loadFfmpeg(onProgress);
+  const extension = file.name.split(".").pop() || "media";
+  const input = `source-${crypto.randomUUID()}.${extension}`;
+  const output = `audio-${crypto.randomUUID()}.f32`;
+  await engine.writeFile(input, await fetchFile(file));
+  try {
+    const exitCode = await engine.exec([
+      "-i", input,
+      "-vn",
+      "-ac", "1",
+      "-ar", String(TRANSCRIPTION_SAMPLE_RATE),
+      "-f", "f32le",
+      output,
+    ]);
+    if (exitCode !== 0) throw new Error("OpenCast could not decode this recording to mono 16 kHz audio.");
+    const data = await engine.readFile(output);
+    if (typeof data === "string") throw new Error("The audio extraction engine returned text instead of PCM audio.");
+    const bytes = new Uint8Array(data.byteLength);
+    bytes.set(data);
+    return new Float32Array(bytes.buffer);
   } finally {
     await engine.deleteFile(input).catch(() => undefined);
     await engine.deleteFile(output).catch(() => undefined);

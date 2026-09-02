@@ -11,7 +11,9 @@ import type {
   MediaKind,
   SceneBoundary,
   Speaker,
+  SpeakerTurn,
   TimeRange,
+  TranscriptionState,
   TranscriptMatch,
   Word,
 } from "./types";
@@ -35,12 +37,19 @@ type EditorState = {
   exportRequest: ExportRequest;
   exportStatus: "idle" | "rendering" | "ready" | "error";
   exportError: string | null;
+  transcription: TranscriptionState;
   setMedia: (file: File, url: string, duration: number) => void;
   loadTranscript: (words: Word[], speakers: Speaker[]) => void;
+  setTranscriptionProgress: (update: Partial<Omit<TranscriptionState, "waveform" | "speakerTurns">>) => void;
+  setWaveform: (waveform: number[]) => void;
+  setSpeakerTurns: (turns: SpeakerTurn[]) => void;
   setSelectedWordIds: (ids: string[]) => void;
   toggleSelectedWord: (id: string) => void;
   deleteWords: (ids: string[]) => number;
   restoreWords: (ids: string[]) => number;
+  correctText: (ids: string[], text: string) => boolean;
+  renameSpeaker: (id: number, name: string) => boolean;
+  reassignSpeaker: (ids: string[], speaker: number) => number;
   removeFillers: () => number;
   removeSilences: (minimum?: number) => { count: number; seconds: number };
   deletePassage: (quote: string) => { ok: boolean; message: string; match?: TranscriptMatch };
@@ -135,6 +144,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
     exportRequest: null,
     exportStatus: "idle",
     exportError: null,
+    transcription: {
+      stage: "idle",
+      progress: 0,
+      message: "Ready to transcribe locally.",
+      error: null,
+      waveform: [],
+      speakerTurns: [],
+    },
 
     setMedia: (file, url, duration) => set({
       mediaFile: file,
@@ -144,6 +161,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
       duration,
       playbackTime: 0,
       isPlaying: false,
+      transcription: {
+        stage: "idle",
+        progress: 0,
+        message: "Media loaded. Preparing local transcription…",
+        error: null,
+        waveform: [],
+        speakerTurns: [],
+      },
     }),
 
     loadTranscript: (words, speakers) => {
@@ -160,8 +185,20 @@ export const useEditorStore = create<EditorState>((set, get) => {
         selectedWordIds: [],
         history: [],
         future: [],
+        transcription: {
+          ...get().transcription,
+          stage: "complete",
+          progress: 1,
+          message: "Transcript ready.",
+          error: null,
+          speakerTurns: [],
+        },
       });
     },
+
+    setTranscriptionProgress: (update) => set((state) => ({ transcription: { ...state.transcription, ...update } })),
+    setWaveform: (waveform) => set((state) => ({ transcription: { ...state.transcription, waveform } })),
+    setSpeakerTurns: (speakerTurns) => set((state) => ({ transcription: { ...state.transcription, speakerTurns } })),
 
     setSelectedWordIds: (ids) => set({ selectedWordIds: ids }),
     toggleSelectedWord: (id) => set((state) => ({
@@ -185,6 +222,34 @@ export const useEditorStore = create<EditorState>((set, get) => {
       const changed = state.words.filter((word) => idSet.has(word.id) && word.deleted).length;
       if (!changed) return 0;
       commit({ ...cloneSnapshot(state), words: state.words.map((word) => idSet.has(word.id) ? { ...word, deleted: false } : word) });
+      return changed;
+    },
+
+    correctText: (ids, text) => {
+      const normalized = text.trim();
+      const state = get();
+      if (!normalized || ids.length !== 1 || !state.words.some((word) => word.id === ids[0])) return false;
+      commit({ ...cloneSnapshot(state), words: state.words.map((word) => word.id === ids[0] ? { ...word, text: normalized } : word) });
+      return true;
+    },
+
+    renameSpeaker: (id, name) => {
+      const normalized = name.trim();
+      const state = get();
+      if (!normalized || !state.speakers.some((speaker) => speaker.id === id)) return false;
+      commit({ ...cloneSnapshot(state), speakers: state.speakers.map((speaker) => speaker.id === id ? { ...speaker, name: normalized } : speaker) });
+      return true;
+    },
+
+    reassignSpeaker: (ids, speaker) => {
+      const idSet = new Set(ids);
+      const state = get();
+      const changed = state.words.filter((word) => idSet.has(word.id) && word.speaker !== speaker).length;
+      if (!changed) return 0;
+      const speakers = state.speakers.some((item) => item.id === speaker)
+        ? state.speakers
+        : [...state.speakers, { id: speaker, name: `Speaker ${speaker + 1}`, color: SPEAKER_COLORS[speaker % SPEAKER_COLORS.length] }];
+      commit({ ...cloneSnapshot(state), speakers, words: state.words.map((word) => idSet.has(word.id) ? { ...word, speaker } : word) });
       return changed;
     },
 
@@ -303,6 +368,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
         speakers: state.speakers.map(({ id, name }) => ({ id, name })),
         clipCount: state.getClips().length,
         cutCount: cuts.length,
+        transcription: {
+          stage: state.transcription.stage,
+          progress: state.transcription.progress,
+          message: state.transcription.message,
+        },
       };
     },
   };

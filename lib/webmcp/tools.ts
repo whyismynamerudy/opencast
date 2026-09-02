@@ -97,6 +97,24 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
       execute: run("restore_words", (args) => ({ restored: state().restoreWords(Array.isArray(args.word_ids) ? args.word_ids.map(String) : []), message: "Restored selected words." })),
     },
     {
+      name: "correct_text",
+      description: "Correct the text of one transcript word without changing its media timing.",
+      inputSchema: objectSchema({ word_id: { type: "string" }, text: { type: "string", minLength: 1 } }, ["word_id", "text"]),
+      execute: run("correct_text", (args) => ({ corrected: state().correctText([String(args.word_id ?? "")], String(args.text ?? "")), message: "Corrected transcript text." })),
+    },
+    {
+      name: "rename_speaker",
+      description: "Rename a detected speaker, for example Speaker 1 to Host.",
+      inputSchema: objectSchema({ speaker_id: { type: "integer", minimum: 0 }, name: { type: "string", minLength: 1 } }, ["speaker_id", "name"]),
+      execute: run("rename_speaker", (args) => ({ renamed: state().renameSpeaker(Number(args.speaker_id), String(args.name ?? "")), message: "Renamed speaker." })),
+    },
+    {
+      name: "reassign_speaker",
+      description: "Assign exact transcript word IDs to a detected speaker ID.",
+      inputSchema: objectSchema({ word_ids: { type: "array", items: { type: "string" }, minItems: 1 }, speaker_id: { type: "integer", minimum: 0 } }, ["word_ids", "speaker_id"]),
+      execute: run("reassign_speaker", (args) => ({ reassigned: state().reassignSpeaker(Array.isArray(args.word_ids) ? args.word_ids.map(String) : [], Number(args.speaker_id)), message: "Reassigned speaker labels." })),
+    },
+    {
       name: "split_at",
       description: "Create an edit boundary at an original-media timestamp in seconds.",
       inputSchema: objectSchema({ time: { type: "number", minimum: 0 } }, ["time"]),
