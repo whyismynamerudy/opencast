@@ -22,7 +22,7 @@ local files chosen in OpenCast
         │
         ├── direct multipart upload ──> Vercel Blob (original source)
         │                                  │
-        │                                  └──> Docker/Render media worker
+        │                                  └──> Docker/Fly.io media worker
         │                                       ffmpeg: 16 kHz / 24 kbps audio chunks
         │                                       OpenAI: diarization + word timing
         │                                              │
@@ -70,16 +70,19 @@ WEBMCP_ORIGIN_TRIAL_TOKEN=
 
 ### 2. Deploy the media worker
 
-The [`worker`](worker) directory is a standalone Docker service suitable for Render or any container platform. Point the service at `worker/Dockerfile`, then configure:
+The [`worker`](worker) directory is a standalone Docker service. OpenCast ships a Fly configuration in [`worker/fly.toml`](worker/fly.toml) sized for one HD source at a time: two shared CPUs, 2 GB RAM, and a 15 GB encrypted volume at `/data`. The worker writes source downloads and FFmpeg intermediates below `OPENCAST_WORK_DIR`, then removes every job directory after transcription.
+
+Deploy it from the worker directory with `fly deploy`. Configure these secrets and environment values:
 
 ```bash
 OPENAI_API_KEY=
 CORS_ORIGIN=https://your-opencast-app.example.com
-ALLOWED_MEDIA_ORIGINS=https://your-store.public.blob.vercel-storage.com
 OPENCAST_SEGMENT_SECONDS=600
 ```
 
-The worker accepts only HTTPS media URLs from `ALLOWED_MEDIA_ORIGINS`; with that variable unset it accepts only Vercel public Blob URLs. It uses an in-memory job map for the MVP, so job state disappears if the worker restarts. Add a database/queue before production.
+The worker accepts Vercel public Blob URLs by default. Optionally set `ALLOWED_MEDIA_ORIGINS` to the exact Blob store origin after the first upload. It uses an in-memory job map for the MVP, so job state disappears if the worker restarts. Add a database/queue before production.
+
+Fly deployment uses one Machine and keeps it running: asynchronous jobs carry on after the browser receives its job ID, so automatic idling must remain disabled. The mounted volume is temporary working space rather than durable project storage; Blob retains the original source.
 
 This hackathon reference uploads originals with **public, unguessable Blob URLs** so the separate worker can retrieve them without receiving a broad storage credential. Add application authentication and switch to a private storage + signed-worker retrieval model for a real production deployment.
 

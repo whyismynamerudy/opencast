@@ -1,0 +1,42 @@
+app = "opencast-media-worker-rudy"
+primary_region = "yyz"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  OPENCAST_WORK_DIR = "/data"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Jobs continue after the POST /jobs response, so the worker must stay alive
+  # while FFmpeg and transcription are in progress.
+  auto_stop_machines = "off"
+  auto_start_machines = false
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 10
+    hard_limit = 25
+
+  [http_service.http_options]
+    # Protect slow residential uploads and long polling connections.
+    idle_timeout = 900
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[mounts]]
+  source = "opencast_data"
+  destination = "/data"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 2048

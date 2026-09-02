@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, extname } from "node:path";
@@ -10,6 +10,7 @@ import { execFile } from "node:child_process";
 
 const run = promisify(execFile);
 const port = Number(process.env.PORT || 8080);
+const workRoot = process.env.OPENCAST_WORK_DIR || tmpdir();
 const jobs = new Map();
 const OPENAI_TRANSCRIPT_URL = "https://api.openai.com/v1/audio/transcriptions";
 
@@ -132,7 +133,8 @@ async function processJob(job) {
   try {
     job.status = "processing";
     job.progress = 0.03;
-    workDirectory = await mkdtemp(join(tmpdir(), "opencast-"));
+    await mkdir(workRoot, { recursive: true });
+    workDirectory = await mkdtemp(join(workRoot, "opencast-"));
     const extension = extname(job.filename || new URL(job.sourceUrl).pathname) || ".media";
     const sourcePath = join(workDirectory, `source${extension.replace(/[^.a-zA-Z0-9]/g, "")}`);
     await downloadSource(job.sourceUrl, sourcePath);
