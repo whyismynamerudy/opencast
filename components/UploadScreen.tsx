@@ -96,13 +96,13 @@ export function UploadScreen() {
         <div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div>
         <p className="eyebrow">WEBMCP-NATIVE POST-PRODUCTION</p>
         <h1>Edit the recording by having a conversation.</h1>
-        <p className="welcome-copy">Drop in a recording and OpenCast extracts audio, transcribes every word, refines cut points, and detects speakers — entirely in your browser. SRT, VTT, and JSON import stay available as a fallback.</p>
+        <p className="welcome-copy">Drop in a recording and OpenCast uses cloud transcription to time every word and detect speakers. Your media stays in the browser for preview and export; only the transcription request is sent to OpenAI.</p>
 
         <div className="upload-grid">
           <button className="upload-card" onClick={() => mediaInput.current?.click()} type="button">
             {busy === "media" ? <LoaderCircle className="spin" /> : <Film />}
             <span>Import media</span>
-            <small>MP4, MOV, WebM, MP3, WAV…</small>
+            <small>MP4, WebM, MP3, M4A, WAV…</small>
           </button>
           <button className="upload-card" onClick={() => transcriptInput.current?.click()} type="button">
             {busy === "transcript" ? <LoaderCircle className="spin" /> : <FileText />}
@@ -113,14 +113,14 @@ export function UploadScreen() {
 
         <div className="welcome-actions">
           <button className="text-button" type="button" onClick={loadSample} disabled={busy !== null}>Try the sample transcript <Upload size={14} /></button>
-          <span>Everything stays in this browser.</span>
+          <span>Preview/export stay local · transcription uses OpenAI</span>
         </div>
         {(running || transcription.stage === "error" || transcription.stage === "extracting") && (
           <div className={`transcription-progress ${transcription.stage === "error" ? "error" : ""}`}>
             <div className="transcription-progress-icon">{running ? <LoaderCircle className="spin" size={18} /> : <Mic2 size={18} />}</div>
             <div>
-              <strong>{transcription.stage === "error" ? "On-device transcription needs attention" : transcription.message}</strong>
-              <span>{transcription.stage === "error" ? transcription.error : `${Math.round(transcription.progress * 100)}% · Silero VAD → Whisper → CTC → pyannote`}</span>
+              <strong>{transcription.stage === "error" ? "Cloud transcription needs attention" : transcription.message}</strong>
+              <span>{transcription.stage === "error" ? transcription.error : `${Math.round(transcription.progress * 100)}% · OpenAI diarization + word timing`}</span>
             </div>
             {running ? <button type="button" className="progress-action" onClick={cancel} aria-label="Cancel transcription"><X size={15} /></button> : mediaFile ? <button type="button" className="progress-action" onClick={() => void transcribe(mediaFile)}>Retry</button> : null}
           </div>
@@ -129,7 +129,7 @@ export function UploadScreen() {
         <input ref={mediaInput} className="sr-only" type="file" accept="audio/*,video/*" onChange={(event) => event.target.files?.[0] && void loadMedia(event.target.files[0])} />
         <input ref={transcriptInput} className="sr-only" type="file" accept=".srt,.vtt,.json,application/json,text/vtt" onChange={(event) => event.target.files?.[0] && void loadTranscriptFile(event.target.files[0])} />
       </section>
-      <p className="welcome-footnote">On-device pipeline · Silero VAD · Whisper word timestamps · CTC alignment · pyannote speaker turns.</p>
+      <p className="welcome-footnote">OpenAI cloud transcription · speaker diarization · word-level edit timing.</p>
     </main>
   );
 }

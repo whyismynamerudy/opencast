@@ -147,7 +147,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     transcription: {
       stage: "idle",
       progress: 0,
-      message: "Ready to transcribe locally.",
+      message: "Ready for cloud transcription.",
       error: null,
       waveform: [],
       speakerTurns: [],
@@ -164,7 +164,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       transcription: {
         stage: "idle",
         progress: 0,
-        message: "Media loaded. Preparing local transcription…",
+        message: "Media loaded. Preparing cloud transcription…",
         error: null,
         waveform: [],
         speakerTurns: [],

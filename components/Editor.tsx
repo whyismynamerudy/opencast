@@ -94,7 +94,7 @@ export function Editor() {
     <main className="editor-shell">
       <header className="topbar">
         <Link className="brand-lockup" href="/" aria-label="OpenCast home"><span className="brand-mark">◒</span><span>OpenCast</span></Link>
-        <div className="project-name"><span className="project-dot" />{mediaName || "Untitled transcript"}<small>{transcription.stage === "complete" ? "on-device transcript + speakers" : "on-device project"}</small></div>
+        <div className="project-name"><span className="project-dot" />{mediaName || "Untitled transcript"}<small>{transcription.stage === "complete" ? "cloud transcript + speakers" : "cloud project"}</small></div>
         <div className="topbar-actions">
           <button type="button" className="toolbar-button" onClick={() => undo()} disabled={!history.length}><Undo2 size={16} /> Undo</button>
           <button type="button" className="toolbar-button" onClick={() => redo()} disabled={!future.length}><Redo2 size={16} /> Redo</button>
