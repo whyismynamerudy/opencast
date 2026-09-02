@@ -16,7 +16,7 @@ function workerUrl(): string | null {
   return value || null;
 }
 
-/** Starts and polls the optional Render/Docker media worker for large sources. */
+/** Starts and polls the optional Docker media worker for large sources. */
 export function useMediaWorker() {
   const timers = useRef(new Set<number>());
   const [runningSourceIds, setRunningSourceIds] = useState<string[]>([]);
@@ -70,10 +70,17 @@ export function useMediaWorker() {
     try {
       setRunningSourceIds((ids) => ids.includes(sourceId) ? ids : [...ids, sourceId]);
       useEditorStore.getState().updateMediaSource(sourceId, { status: "transcribing", error: null });
-      const response = await fetch(`${baseUrl}/jobs`, {
+      const ticketResponse = await fetch("/api/media/worker-ticket", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sourceUrl: source.storageUrl, sourceId, filename: source.name }),
+      });
+      const ticketPayload = await ticketResponse.json() as { ticket?: string; error?: string };
+      if (!ticketResponse.ok || !ticketPayload.ticket) throw new Error(ticketPayload.error || "Could not authorize the media worker job.");
+      const response = await fetch(`${baseUrl}/jobs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticket: ticketPayload.ticket }),
       });
       const payload = await response.json() as { id?: string; error?: string };
       if (!response.ok || !payload.id) throw new Error(payload.error || "Media worker did not create a job.");

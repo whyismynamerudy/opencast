@@ -1,0 +1,24 @@
+import { isProjectMediaUrl, issueWorkerJobTicket } from "@/lib/workerTicket";
+import { NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+
+const SOURCE_ID = /^[a-zA-Z0-9-]{16,}$/;
+
+export async function POST(request: Request): Promise<NextResponse> {
+  try {
+    const body = await request.json() as { sourceUrl?: unknown; sourceId?: unknown; filename?: unknown };
+    if (!isProjectMediaUrl(body.sourceUrl) || typeof body.sourceId !== "string" || !SOURCE_ID.test(body.sourceId)) {
+      return NextResponse.json({ error: "A stored OpenCast media source is required." }, { status: 400 });
+    }
+    if (typeof body.filename !== "string" || !body.filename || body.filename.length > 255) {
+      return NextResponse.json({ error: "A valid source filename is required." }, { status: 400 });
+    }
+    return NextResponse.json({ ticket: issueWorkerJobTicket({ sourceUrl: body.sourceUrl, sourceId: body.sourceId, filename: body.filename }) }, {
+      headers: { "cache-control": "no-store" },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not authorize the media worker job.";
+    return NextResponse.json({ error: message }, { status: 503 });
+  }
+}

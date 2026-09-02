@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 const run = promisify(execFile);
 const port = Number(process.env.PORT || 8080);
@@ -46,6 +47,31 @@ function allowedSourceUrl(value) {
   } catch {
     return false;
   }
+}
+
+function readJobTicket(value) {
+  const secret = process.env.OPENCAST_WORKER_SIGNING_SECRET;
+  if (!secret) throw new Error("Media worker authorization is not configured.");
+  if (typeof value !== "string") throw new Error("A media worker job ticket is required.");
+  const [encoded, suppliedSignature, ...rest] = value.split(".");
+  if (!encoded || !suppliedSignature || rest.length) throw new Error("Media worker job ticket is invalid.");
+  const expectedSignature = createHmac("sha256", secret).update(encoded).digest("base64url");
+  const expected = Buffer.from(expectedSignature);
+  const supplied = Buffer.from(suppliedSignature);
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) throw new Error("Media worker job ticket is invalid.");
+  let claim;
+  try {
+    claim = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Media worker job ticket is invalid.");
+  }
+  if (!allowedSourceUrl(claim?.sourceUrl) || typeof claim?.filename !== "string" || typeof claim?.sourceId !== "string") {
+    throw new Error("Media worker job ticket is invalid.");
+  }
+  if (!Number.isFinite(claim.expiresAt) || claim.expiresAt <= Date.now() || claim.expiresAt > Date.now() + 15 * 60 * 1000) {
+    throw new Error("Media worker job ticket has expired.");
+  }
+  return claim;
 }
 
 function jobView(job) {
@@ -171,8 +197,8 @@ const server = createServer(async (request, response) => {
   if (request.method === "POST" && request.url === "/jobs") {
     try {
       const body = await readJson(request);
-      if (typeof body.sourceUrl !== "string" || !allowedSourceUrl(body.sourceUrl)) return respond(response, 400, { error: "sourceUrl must be an allowed HTTPS project-media URL." });
-      const job = { id: crypto.randomUUID(), sourceUrl: body.sourceUrl, filename: typeof body.filename === "string" ? body.filename : "source.media", status: "queued", progress: 0, error: null, result: null };
+      const claim = readJobTicket(body.ticket);
+      const job = { id: crypto.randomUUID(), sourceUrl: claim.sourceUrl, filename: claim.filename, status: "queued", progress: 0, error: null, result: null };
       jobs.set(job.id, job);
       void processJob(job);
       setTimeout(() => jobs.delete(job.id), 60 * 60 * 1000).unref();

@@ -58,6 +58,9 @@ OPENCAST_MAX_SOURCE_GB=5
 # Browser-visible URL of the worker deployed in step 2
 NEXT_PUBLIC_OPENCAST_MEDIA_WORKER_URL=https://your-opencast-worker.example.com
 
+# Shared only with the worker. The app uses it to issue short-lived job tickets.
+OPENCAST_WORKER_SIGNING_SECRET=
+
 # Only used by the existing small-file fallback endpoint.
 OPENAI_API_KEY=
 OPENCAST_MAX_UPLOAD_MB=25
@@ -77,10 +80,11 @@ Deploy it from the worker directory with `fly deploy`. Configure these secrets a
 ```bash
 OPENAI_API_KEY=
 CORS_ORIGIN=https://your-opencast-app.example.com
+OPENCAST_WORKER_SIGNING_SECRET=
 OPENCAST_SEGMENT_SECONDS=600
 ```
 
-The worker accepts Vercel public Blob URLs by default. Optionally set `ALLOWED_MEDIA_ORIGINS` to the exact Blob store origin after the first upload. It uses an in-memory job map for the MVP, so job state disappears if the worker restarts. Add a database/queue before production.
+The worker accepts Vercel public Blob URLs by default, but it starts jobs only with a short-lived ticket signed by the protected Vercel app. Set the same high-entropy `OPENCAST_WORKER_SIGNING_SECRET` on both hosts. Optionally set `ALLOWED_MEDIA_ORIGINS` to the exact Blob store origin after the first upload. It uses an in-memory job map for the MVP, so job state disappears if the worker restarts. Add a database/queue before production.
 
 Fly deployment uses one Machine and keeps it running: asynchronous jobs carry on after the browser receives its job ID, so automatic idling must remain disabled. The mounted volume is temporary working space rather than durable project storage; Blob retains the original source.
 
@@ -119,6 +123,7 @@ npm run lint
 npm run test:core
 npm run test:pipeline
 npm run test:multicam
+npm run test:worker-ticket
 npm run test:webmcp
 npm run typecheck
 npm run build
