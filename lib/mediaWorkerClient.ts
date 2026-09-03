@@ -10,11 +10,14 @@ type WorkerJobStatus = {
   progress?: number;
   error?: string;
   result?: { words: Word[]; speakers: Speaker[]; speakerTurns: SpeakerTurn[] };
+  speakerStage?: "pending" | "labeling" | "complete" | "error";
+  speakerError?: string;
 };
 
 type QueueResult = { ok: true; jobId: string } | { ok: false; error: string };
 
 const POLL_INTERVAL_MS = 2_000;
+const SPEAKER_POLL_INTERVAL_MS = 5_000;
 const activePolls = new Set<string>();
 
 function workerUrl(): string | null {
@@ -71,6 +74,7 @@ async function issueWorkerTicket(source: { storagePath: string | null; id: strin
 function pollWorkerJob(baseUrl: string, sourceId: string, jobId: string) {
   if (activePolls.has(jobId) || typeof window === "undefined") return;
   activePolls.add(jobId);
+  let wordsLoaded = false;
 
   const check = async () => {
     try {
@@ -79,9 +83,30 @@ function pollWorkerJob(baseUrl: string, sourceId: string, jobId: string) {
       if (!response.ok) throw new Error(payload.error || "Media worker status is unavailable.");
       if (payload.status === "complete" && payload.result) {
         const editor = useEditorStore.getState();
-        editor.loadSourceTranscript(sourceId, payload.result.words, payload.result.speakers);
-        editor.setSpeakerTurns(payload.result.speakerTurns);
-        editor.addActivity("media_worker", `Finished transcription for ${editor.mediaSources.find((source) => source.id === sourceId)?.name ?? "source"}.`, "success");
+        const sourceName = editor.mediaSources.find((source) => source.id === sourceId)?.name ?? "source";
+        const speakersPending = payload.speakerStage === "pending" || payload.speakerStage === "labeling";
+        if (!wordsLoaded) {
+          // Words unlock the editor immediately; speaker labels follow behind.
+          editor.loadSourceTranscript(sourceId, payload.result.words, payload.result.speakers);
+          editor.setSpeakerTurns(payload.result.speakerTurns);
+          editor.addActivity("media_worker", speakersPending
+            ? `Transcript ready for ${sourceName}. Speaker labels are on the way.`
+            : `Finished transcription for ${sourceName}.`, "success");
+        }
+        if (speakersPending) {
+          wordsLoaded = true;
+          window.setTimeout(() => void check(), SPEAKER_POLL_INTERVAL_MS);
+          return;
+        }
+        if (wordsLoaded) {
+          if (payload.speakerStage === "error") {
+            editor.addActivity("media_worker", payload.speakerError || `Speaker labeling failed for ${sourceName}. The transcript stays editable.`, "error");
+          } else {
+            const relabeled = editor.applySourceSpeakers(sourceId, payload.result.words, payload.result.speakers);
+            editor.setSpeakerTurns(payload.result.speakerTurns);
+            if (relabeled) editor.addActivity("media_worker", `Speaker labels ready for ${sourceName}.`, "success");
+          }
+        }
         activePolls.delete(jobId);
         return;
       }
@@ -90,6 +115,12 @@ function pollWorkerJob(baseUrl: string, sourceId: string, jobId: string) {
       window.setTimeout(() => void check(), POLL_INTERVAL_MS);
     } catch (reason) {
       activePolls.delete(jobId);
+      if (wordsLoaded) {
+        // The transcript is already loaded and editable; a late labeling or
+        // polling failure must not mark the source as broken.
+        useEditorStore.getState().addActivity("media_worker", reason instanceof Error ? reason.message : "Speaker labeling did not finish.", "error");
+        return;
+      }
       failWorkerSource(sourceId, reason);
     }
   };

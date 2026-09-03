@@ -86,6 +86,7 @@ type EditorState = {
   setSourceRole: (sourceId: string, role: SourceRole) => boolean;
   setSourceSyncOffset: (sourceId: string, syncOffset: number) => boolean;
   loadSourceTranscript: (sourceId: string, words: Word[], speakers: Speaker[]) => void;
+  applySourceSpeakers: (sourceId: string, words: Word[], speakers: Speaker[]) => number;
   applyProgramCut: (sourceId: string, start: number, end: number, expectedRevision?: number) => { ok: boolean; message: string; revision: number };
   loadTranscript: (words: Word[], speakers: Speaker[]) => void;
   setTranscriptionProgress: (update: Partial<Omit<TranscriptionState, "waveform" | "speakerTurns">>) => void;
@@ -505,6 +506,57 @@ export const useEditorStore = create<EditorState>((set, get) => {
           speakerTurns: [],
         },
       });
+    },
+
+    // Speaker labels arrive as a background enrichment after the transcript is
+    // already editable. Worker word ids are deterministic, so labels map onto
+    // the live words by id without touching text edits, cuts, or history.
+    applySourceSpeakers: (sourceId, words, speakers) => {
+      const state = get();
+      const source = state.mediaSources.find((item) => item.id === sourceId);
+      if (!source || !speakers.length) return 0;
+      const takenSpeakerIds = new Set(state.speakers.map((speaker) => speaker.id));
+      let nextSpeakerId = state.speakers.reduce((highest, speaker) => Math.max(highest, speaker.id), -1) + 1;
+      const speakerMap = new Map<number, number>();
+      const sourceSpeakers: Speaker[] = [];
+      for (const detected of speakers) {
+        const composite = `${source.name} · ${detected.name}`;
+        const existing = state.speakers.find((speaker) => speaker.name === composite);
+        const id = existing?.id ?? (() => {
+          while (takenSpeakerIds.has(nextSpeakerId)) nextSpeakerId++;
+          takenSpeakerIds.add(nextSpeakerId);
+          return nextSpeakerId++;
+        })();
+        speakerMap.set(detected.id, id);
+        sourceSpeakers.push(existing ?? {
+          id,
+          name: composite,
+          color: detected.color || SPEAKER_COLORS[id % SPEAKER_COLORS.length],
+        });
+      }
+      const labelByWordId = new Map<string, number | undefined>(
+        words.map((word) => [`${sourceId}:${word.id}`, speakerMap.get(word.speaker)]),
+      );
+      let changed = 0;
+      const nextWords = state.words.map((word) => {
+        if (word.sourceId !== sourceId) return word;
+        const mapped = labelByWordId.get(word.id);
+        if (mapped === undefined || word.speaker === mapped) return word;
+        changed += 1;
+        return { ...word, speaker: mapped };
+      });
+      if (!changed) return 0;
+      const referenced = new Set(nextWords.map((word) => word.speaker));
+      const sourcePrefix = `${source.name} · `;
+      set({
+        words: nextWords,
+        speakers: [
+          ...state.speakers.filter((speaker) => !speaker.name.startsWith(sourcePrefix) || referenced.has(speaker.id)),
+          ...sourceSpeakers.filter((speaker) => !state.speakers.some((existing) => existing.id === speaker.id)),
+        ],
+        projectRevision: state.projectRevision + 1,
+      });
+      return changed;
     },
 
     applyProgramCut: (sourceId, start, end, expectedRevision) => {

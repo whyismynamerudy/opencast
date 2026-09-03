@@ -16,7 +16,8 @@
     "test:auth": "tsx tests/auth.test.ts",
     "test:projects": "tsx tests/projectSnapshot.test.ts",
     "test:multicam": "tsx tests/multicam.test.ts",
-    "test:worker-ticket": "tsx tests/workerTicket.test.ts"
+    "test:worker-ticket": "tsx tests/workerTicket.test.ts",
+    "test:speakers": "tsx tests/speakerEnrichment.test.ts"
   },
   "keywords": [],
   "author": "",

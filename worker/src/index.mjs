@@ -8,6 +8,12 @@ import { Transform } from "node:stream";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
+// Node's built-in fetch aborts any request whose response headers take more
+// than 300s (undici's default). gpt-4o-transcribe-diarize regularly needs
+// longer on podcast chunks, so OpenAI calls go through an explicit dispatcher
+// with real deadlines. The npm undici fetch must be used with its own Agent —
+// setGlobalDispatcher from the package does not affect the built-in fetch.
+import { Agent as HttpAgent, fetch as fetchWithDispatcher, FormData as UploadFormData } from "undici";
 import {
   AUDIO_INPUT_MANIFEST_VERSION,
   audioPlanForDuration,
@@ -27,12 +33,17 @@ const jobRoot = join(workRoot, "opencast-jobs");
 const mediaRoot = join(workRoot, "opencast-media");
 const jobs = new Map();
 const pendingJobs = [];
+const pendingEnrichments = [];
 const activeUploads = new Set();
 const deletedSourceIds = new Set();
 let processingQueue = false;
+let processingEnrichments = false;
 let projectStore = null;
 const OPENAI_TRANSCRIPT_URL = "https://api.openai.com/v1/audio/transcriptions";
 const maxTranscriptionAttempts = Math.max(1, Math.min(Number(process.env.OPENCAST_TRANSCRIPTION_MAX_ATTEMPTS || 4), 8));
+const openaiTimeoutMs = Math.max(60_000, Math.min(Number(process.env.OPENCAST_OPENAI_TIMEOUT_MS || 600_000), 1_800_000));
+const wordConcurrency = Math.max(1, Math.min(Number(process.env.OPENCAST_WORD_CONCURRENCY || 3), 8));
+const openaiDispatcher = new HttpAgent({ connectTimeout: 30_000, headersTimeout: openaiTimeoutMs, bodyTimeout: openaiTimeoutMs });
 const jobRetentionMs = Math.max(60 * 60 * 1000, Number(process.env.OPENCAST_JOB_RETENTION_MS || 24 * 60 * 60 * 1000));
 const maxUploadChunkBytes = Math.max(1 * 1024 * 1024, Math.min(Number(process.env.OPENCAST_UPLOAD_CHUNK_BYTES || 16 * 1024 * 1024), 64 * 1024 * 1024));
 const minFreeStorageBytes = Math.max(128 * 1024 * 1024, Number(process.env.OPENCAST_MIN_FREE_STORAGE_BYTES || 1 * 1024 * 1024 * 1024));
@@ -133,7 +144,15 @@ function readProjectTicket(request) {
 
 function jobView(job) {
   return job.status === "complete"
-    ? { id: job.id, status: job.status, stage: job.stage, progress: 1, result: job.result }
+    ? {
+      id: job.id,
+      status: job.status,
+      stage: job.stage,
+      progress: 1,
+      result: job.result,
+      speakerStage: job.speakerStage ?? "complete",
+      ...(job.speakerError ? { speakerError: job.speakerError } : {}),
+    }
     : { id: job.id, status: job.status, stage: job.stage, progress: job.progress, ...(job.error ? { error: job.error } : {}) };
 }
 
@@ -195,6 +214,8 @@ function jobMetadata(job) {
     progress: job.progress,
     error: job.error,
     result: job.result,
+    speakerStage: job.speakerStage,
+    speakerError: job.speakerError,
     metrics: job.metrics,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -529,17 +550,18 @@ async function transcribeRequest(filePath, model, responseFormat, extra = [], co
   return withTransientRetries({
     maxAttempts: maxTranscriptionAttempts,
     attempt: async () => {
-      const form = new FormData();
+      const form = new UploadFormData();
       form.append("file", new Blob([buffer], { type: "audio/ogg" }), "audio.ogg");
       form.append("model", model);
       form.append("response_format", responseFormat);
       for (const [key, value] of extra) form.append(key, value);
       let response;
       try {
-        response = await fetch(OPENAI_TRANSCRIPT_URL, {
+        response = await fetchWithDispatcher(OPENAI_TRANSCRIPT_URL, {
           method: "POST",
           headers: { authorization: `Bearer ${apiKey}` },
           body: form,
+          dispatcher: openaiDispatcher,
         });
       } catch (error) {
         throw requestError(`OpenAI ${model} request did not receive a response: ${describeError(error)}`, { retryable: true });
@@ -571,6 +593,35 @@ async function transcribeRequest(filePath, model, responseFormat, extra = [], co
       console.warn(`[job ${context.jobId ?? "unknown"}] Retrying ${model} for chunk ${context.chunkNumber ?? "?"} after attempt ${attempt}/${maxTranscriptionAttempts}: ${describeError(error)}. Next attempt ${nextAttempt} in ${delayMs}ms.`);
     },
   });
+}
+
+function timedChunkPath(directory, index) {
+  return join(directory, `chunk-${String(index).padStart(3, "0")}-timed.json`);
+}
+
+function diarizedChunkPath(directory, index) {
+  return join(directory, `chunk-${String(index).padStart(3, "0")}-diarized.json`);
+}
+
+/** Run tasks over items with bounded concurrency; stops pulling after a failure. */
+async function mapPool(items, concurrency, task) {
+  const results = new Array(items.length);
+  let next = 0;
+  let failed = false;
+  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
+    while (!failed) {
+      const index = next++;
+      if (index >= items.length) return;
+      try {
+        results[index] = await task(items[index], index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function normalizeChunks(chunks) {
@@ -638,107 +689,68 @@ async function processJob(job) {
     await persistJob(job);
 
     const segments = audioInputs.segments;
-    const chunks = [];
-    const totalRequests = segments.length * 2;
-    let completeRequests = 0;
-    for (let index = 0; index < segments.length; index++) {
-      if (deletedSourceIds.has(job.sourceId)) return;
+
+    // Phase 1 — word timing for every chunk through a bounded pool. The
+    // transcript becomes editable the moment words land; speaker labels are
+    // an asynchronous enrichment and never hold the editor hostage.
+    let timedDone = 0;
+    const timedPayloads = await mapPool(segments, wordConcurrency, async (segment, index) => {
+      if (deletedSourceIds.has(job.sourceId)) return null;
       const chunkNumber = index + 1;
       const chunkLabel = labelForChunk(chunkNumber, segments.length);
-      const diarizedPath = join(workDirectory, `chunk-${String(index).padStart(3, "0")}-diarized.json`);
-      const timedPath = join(workDirectory, `chunk-${String(index).padStart(3, "0")}-timed.json`);
-      let diarized = await readJsonFile(diarizedPath);
+      const timedPath = timedChunkPath(workDirectory, index);
       let timed = await readJsonFile(timedPath);
-      if (diarized) completeRequests += 1;
-      if (timed) completeRequests += 1;
-
-      const pendingLabels = [!diarized && "speakers", !timed && "word timing"].filter(Boolean);
-      job.stage = pendingLabels.length
-        ? `transcribing ${chunkLabel} · ${pendingLabels.join(" + ")}`
-        : `recovering ${chunkLabel}`;
-      job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
-      await persistJob(job);
-
-      // The two requests are independent. Running them together removes the
-      // serial wait without sacrificing recovery: each response is persisted
-      // before the task resolves, so a restart retries only the missing half.
-      const tasks = [];
-      if (!diarized) {
-        tasks.push((async () => {
-          const startedAt = Date.now();
-          const payload = await transcribeRequest(segments[index].path, "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]], {
-            jobId: job.id,
-            chunkNumber,
-            onRetry: async ({ nextAttempt, delayMs }) => {
-              job.stage = `retrying ${chunkLabel} · speakers (${nextAttempt})`;
-              await persistJob(job);
-              console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying speaker labels for ${chunkLabel}.`);
-            },
-          });
-          await writeJsonAtomic(diarizedPath, payload);
-          diarized = payload;
-          completeRequests += 1;
-          recordTranscriptionMetric(job, {
-            model: "gpt-4o-transcribe-diarize",
-            chunkNumber,
-            durationMs: Date.now() - startedAt,
-            inputBytes: segments[index].bytes,
-            usage: payload?.usage ?? null,
-            completedAt: Date.now(),
-          });
-          job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
-          await persistJob(job);
-        })());
-      }
       if (!timed) {
-        tasks.push((async () => {
-          const startedAt = Date.now();
-          const payload = await transcribeRequest(segments[index].path, "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]], {
-            jobId: job.id,
-            chunkNumber,
-            onRetry: async ({ nextAttempt, delayMs }) => {
-              job.stage = `retrying ${chunkLabel} · word timing (${nextAttempt})`;
-              await persistJob(job);
-              console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying word timing for ${chunkLabel}.`);
-            },
-          });
-          await writeJsonAtomic(timedPath, payload);
-          timed = payload;
-          completeRequests += 1;
-          recordTranscriptionMetric(job, {
-            model: "whisper-1",
-            chunkNumber,
-            durationMs: Date.now() - startedAt,
-            inputBytes: segments[index].bytes,
-            usage: payload?.usage ?? null,
-            completedAt: Date.now(),
-          });
-          job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
-          await persistJob(job);
-        })());
+        const startedAt = Date.now();
+        timed = await transcribeRequest(segment.path, "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]], {
+          jobId: job.id,
+          chunkNumber,
+          onRetry: async ({ nextAttempt, delayMs }) => {
+            job.stage = `retrying word timing · ${chunkLabel} (${nextAttempt})`;
+            await persistJob(job);
+            console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying word timing for ${chunkLabel}.`);
+          },
+        });
+        await writeJsonAtomic(timedPath, timed);
+        recordTranscriptionMetric(job, {
+          model: "whisper-1",
+          chunkNumber,
+          durationMs: Date.now() - startedAt,
+          inputBytes: segment.bytes,
+          usage: timed?.usage ?? null,
+          completedAt: Date.now(),
+        });
       }
-      const outcomes = await Promise.allSettled(tasks);
-      if (deletedSourceIds.has(job.sourceId)) return;
-      const failed = outcomes.find((outcome) => outcome.status === "rejected");
-      if (failed?.status === "rejected") throw failed.reason;
-      if (!diarized || !timed) throw new Error(`OpenAI did not return a complete transcription for ${chunkLabel}.`);
-      chunks.push({ diarized, timed, startSeconds: segments[index].startSeconds });
-      job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
+      timedDone += 1;
+      job.stage = segments.length === 1 ? "transcribing words" : `transcribing words · ${timedDone}/${segments.length}`;
+      job.progress = 0.15 + (timedDone / segments.length) * 0.8;
       await persistJob(job);
-    }
-    job.stage = "finalizing";
-    job.progress = 0.97;
-    await persistJob(job);
-    const result = normalizeChunks(chunks);
+      return timed;
+    });
     if (deletedSourceIds.has(job.sourceId)) return;
+    if (timedPayloads.some((timed) => !timed)) throw new Error("OpenAI did not return word timing for every chunk.");
+
+    // Reuse any diarized checkpoints an earlier run already saved.
+    const diarizedPayloads = await Promise.all(segments.map((segment, index) => readJsonFile(diarizedChunkPath(workDirectory, index))));
+    const result = normalizeChunks(segments.map((segment, index) => ({
+      diarized: diarizedPayloads[index],
+      timed: timedPayloads[index],
+      startSeconds: segment.startSeconds,
+    })));
     if (!result.words.length) throw new Error("OpenAI did not return timed words for this source.");
     job.status = "complete";
     job.stage = "complete";
     job.progress = 1;
     job.result = result;
+    job.speakerStage = diarizedPayloads.every(Boolean) ? "complete" : "pending";
+    job.speakerError = null;
     await persistJob(job);
-    console.info(`[job ${job.id}] Completed ${result.words.length} words from ${job.filename}`);
-    await clearCompletedJobArtifacts(job).catch((cleanupError) => console.warn(`[job ${job.id}] Could not clear completed media artifacts: ${describeError(cleanupError)}`));
+    console.info(`[job ${job.id}] Words ready: ${result.words.length} words from ${job.filename}; speaker labels ${job.speakerStage}.`);
+    if (job.speakerStage === "complete") {
+      await clearCompletedJobArtifacts(job).catch((cleanupError) => console.warn(`[job ${job.id}] Could not clear completed media artifacts: ${describeError(cleanupError)}`));
+    } else {
+      enqueueSpeakerEnrichment(job);
+    }
   } catch (error) {
     job.status = "error";
     job.stage = "error";
@@ -764,6 +776,89 @@ async function processQueue() {
 function enqueueJob(job) {
   pendingJobs.push(job);
   void processQueue();
+}
+
+/**
+ * Speaker labeling runs on its own queue so a slow gpt-4o-transcribe-diarize
+ * call can never delay word transcription for the next uploaded source.
+ */
+function enqueueSpeakerEnrichment(job) {
+  pendingEnrichments.push(job);
+  void processEnrichmentQueue();
+}
+
+async function processEnrichmentQueue() {
+  if (processingEnrichments) return;
+  processingEnrichments = true;
+  try {
+    while (pendingEnrichments.length) {
+      const job = pendingEnrichments.shift();
+      if (job) await enrichJobSpeakers(job);
+    }
+  } finally {
+    processingEnrichments = false;
+  }
+}
+
+async function enrichJobSpeakers(job) {
+  const workDirectory = jobDirectory(job);
+  try {
+    if (deletedSourceIds.has(job.sourceId)) return;
+    const manifest = await readJsonFile(join(workDirectory, "segments.json"));
+    const audioInputs = await inputPathsFromManifest(manifest, workDirectory);
+    if (!audioInputs) throw new Error("Prepared audio for this job is no longer available.");
+    const segments = audioInputs.segments;
+    job.speakerStage = "labeling";
+    await persistJob(job);
+    const diarizedPayloads = [];
+    for (let index = 0; index < segments.length; index++) {
+      if (deletedSourceIds.has(job.sourceId)) return;
+      const chunkNumber = index + 1;
+      const chunkLabel = labelForChunk(chunkNumber, segments.length);
+      const diarizedPath = diarizedChunkPath(workDirectory, index);
+      let diarized = await readJsonFile(diarizedPath);
+      if (!diarized) {
+        const startedAt = Date.now();
+        diarized = await transcribeRequest(segments[index].path, "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]], {
+          jobId: job.id,
+          chunkNumber,
+          onRetry: async ({ nextAttempt, delayMs }) => {
+            console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying speaker labels for ${chunkLabel} (attempt ${nextAttempt}).`);
+          },
+        });
+        await writeJsonAtomic(diarizedPath, diarized);
+        recordTranscriptionMetric(job, {
+          model: "gpt-4o-transcribe-diarize",
+          chunkNumber,
+          durationMs: Date.now() - startedAt,
+          inputBytes: segments[index].bytes,
+          usage: diarized?.usage ?? null,
+          completedAt: Date.now(),
+        });
+        await persistJob(job);
+      }
+      diarizedPayloads.push(diarized);
+    }
+    const timedPayloads = await Promise.all(segments.map((segment, index) => readJsonFile(timedChunkPath(workDirectory, index))));
+    if (timedPayloads.some((timed) => !timed)) throw new Error("Word-timing checkpoints for this job are no longer available.");
+    job.result = normalizeChunks(segments.map((segment, index) => ({
+      diarized: diarizedPayloads[index],
+      timed: timedPayloads[index],
+      startSeconds: segment.startSeconds,
+    })));
+    job.speakerStage = "complete";
+    job.speakerError = null;
+    await persistJob(job);
+    console.info(`[job ${job.id}] Speaker labels ready for ${job.filename}.`);
+    await clearCompletedJobArtifacts(job).catch((cleanupError) => console.warn(`[job ${job.id}] Could not clear completed media artifacts: ${describeError(cleanupError)}`));
+  } catch (error) {
+    // The transcript stays fully usable; keep artifacts so a later restart can
+    // resume labeling from the last diarized chunk until retention expires.
+    job.speakerStage = "error";
+    job.speakerError = error instanceof Error ? error.message : "Speaker labeling failed.";
+    await persistJob(job).catch((persistError) => console.error(`[job ${job.id}] Could not save speaker-labeling state: ${describeError(persistError)}`));
+    console.error(`[job ${job.id}] Speaker labeling failed: ${job.speakerError}`);
+  }
 }
 
 async function clearCompletedJobArtifacts(job) {
@@ -805,6 +900,9 @@ async function restoreJobs() {
       await persistJob(job);
       enqueueJob(job);
       console.info(`[job ${job.id}] Restored from durable checkpoint.`);
+    } else if (job.status === "complete" && (job.speakerStage === "pending" || job.speakerStage === "labeling")) {
+      enqueueSpeakerEnrichment(job);
+      console.info(`[job ${job.id}] Resuming speaker labeling from durable checkpoint.`);
     }
   }
 }
