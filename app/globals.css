@@ -34,6 +34,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 h1 { max-width: 590px; margin: 10px 0 15px; color: #18181b; font-size: clamp(36px, 5vw, 54px); line-height: 1.01; letter-spacing: -.06em; }
 .welcome-copy { max-width: 610px; margin: 0; color: #71717a; font-size: 16px; line-height: 1.62; }
 .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 32px; }
+.upload-grid.media-only { grid-template-columns: 1fr; }
 .upload-card { min-height: 142px; display: flex; flex-direction: column; align-items: flex-start; gap: 11px; padding: 19px; color: #27272a; border: 1px solid #e4e4e7; border-radius: 12px; background: #fff; text-align: left; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
 .upload-card:hover { border-color: #c7d2fe; background: #fafaff; transform: translateY(-1px); }
 .upload-card svg { color: var(--accent); }
@@ -63,6 +64,10 @@ h1 { max-width: 590px; margin: 10px 0 15px; color: #18181b; font-size: clamp(36p
 .source-ingest-row.error > svg { color: #ef4444; }
 .source-row-progress { display: block; height: 3px; margin-top: 7px; overflow: hidden; border-radius: 99px; background: #eeeeef; font-style: normal; }
 .welcome-actions { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 21px; color: #a1a1aa; font-size: 11px; }
+.media-upload-note { margin: 21px 0 0; color: #a1a1aa; font-size: 11px; }
+.welcome-project-nav { display: flex; justify-content: flex-end; gap: 5px; }
+.welcome-project-nav button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; color: #71717a; border: 0; border-radius: 5px; background: transparent; font-size: 10px; font-weight: 700; }
+.welcome-project-nav button:hover { color: #27272a; background: #f4f4f5; }
 .text-button { display: inline-flex; align-items: center; gap: 5px; padding: 0; color: #4f46e5; border: 0; background: none; font-weight: 700; }
 .form-error { margin: 16px 0 0; color: #dc2626; font-size: 12px; }
 .transcription-progress { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 18px; padding: 11px; color: #4f46e5; border: 1px solid #dfe3ff; border-radius: 8px; background: #f8f9ff; }

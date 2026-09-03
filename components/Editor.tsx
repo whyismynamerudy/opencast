@@ -99,7 +99,7 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
     return () => { cancelled = true; };
   }, [exportRequest]);
 
-  if (!words.length) return <UploadScreen />;
+  if (!words.length) return <UploadScreen onOpenProjects={onOpenProjects} onSignOut={onSignOut} />;
 
   return (
     <main className={`editor-shell ${inspectorOpen ? "" : "inspector-closed"}`}>

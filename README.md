@@ -48,7 +48,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. **Try the sample transcript** exercises the editor without media, storage, or an API key. To process local media, configure Blob storage and the worker as described below; the OpenAI key stays on the worker, never in the browser or Next.js app.
+Open `http://localhost:3000`, create a project, and choose one or more audio/video recordings. To process local media, configure Blob storage and the worker as described below; the OpenAI key stays on the worker, never in the browser or Next.js app. The product intentionally starts with media rather than manual transcript-file import.
 
 For the demo workspace, sign in with `admin` / `admin`.
 

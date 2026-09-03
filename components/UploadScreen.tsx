@@ -1,41 +1,25 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { CheckCircle2, CloudUpload, FileText, Film, LoaderCircle, Upload } from "lucide-react";
+import { CheckCircle2, CloudUpload, Film, FolderOpen, LoaderCircle, LogOut } from "lucide-react";
 import { useMediaSources } from "@/hooks/useMediaSources";
 import { useMediaWorker } from "@/hooks/useMediaWorker";
 import { sourceProgress, sourceStatusLabel } from "@/lib/mediaStatus";
-import { parseTranscriptFile } from "@/lib/parseTranscript";
 import { useEditorStore } from "@/lib/store";
 
-const SAMPLE_TRANSCRIPT = `1
-00:00:00,000 --> 00:00:03,400
-Host: Um, welcome back to OpenCast. Today we're talking about the future of creative work.
+type UploadScreenProps = {
+  onOpenProjects?: () => void;
+  onSignOut?: () => void;
+};
 
-2
-00:00:04,200 --> 00:00:08,900
-Guest: I think the best part is that editing can feel more like a conversation.
-
-3
-00:00:10,100 --> 00:00:14,000
-Host: Uh, exactly. You can ask for the dead air and the filler words to disappear.
-
-4
-00:00:15,100 --> 00:00:19,800
-Guest: The human stays in control, but the busywork becomes much lighter.`;
-
-export function UploadScreen() {
+export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
   const mediaInput = useRef<HTMLInputElement>(null);
-  const transcriptInput = useRef<HTMLInputElement>(null);
-  const loadTranscript = useEditorStore((state) => state.loadTranscript);
-  const addActivity = useEditorStore((state) => state.addActivity);
   const sources = useEditorStore((state) => state.mediaSources);
   const sourceUploadRequest = useEditorStore((state) => state.sourceUploadRequest);
   const clearSourceUploadRequest = useEditorStore((state) => state.clearSourceUploadRequest);
   const transcription = useEditorStore((state) => state.transcription);
   const { importFiles, importing } = useMediaSources();
   const { processLargeSource } = useMediaWorker();
-  const [busy, setBusy] = useState<"transcript" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadMedia = async (files: File[]) => {
@@ -55,51 +39,23 @@ export function UploadScreen() {
     ? Math.round(sources.reduce((total, source) => total + sourceProgress(source), 0) / sources.length * 100)
     : 0;
 
-  const loadTranscriptFile = async (file: File) => {
-    setBusy("transcript");
-    setError(null);
-    try {
-      const parsed = await parseTranscriptFile(file);
-      loadTranscript(parsed.words, parsed.speakers);
-      addActivity("transcript_import", `Imported ${parsed.words.length} time-coded words.`, "success");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Transcript import failed.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const loadSample = async () => {
-    setBusy("transcript");
-    setError(null);
-    try {
-      const { parseTranscript } = await import("@/lib/parseTranscript");
-      const parsed = parseTranscript(SAMPLE_TRANSCRIPT, "opencast-demo.srt");
-      loadTranscript(parsed.words, parsed.speakers);
-      addActivity("demo_project", "Opened the sample transcript. Add host and guest angles when ready.", "info");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   return (
     <main className="welcome-shell">
       <section className="welcome-card">
+        {(onOpenProjects || onSignOut) && <div className="welcome-project-nav">
+          {onOpenProjects && <button type="button" onClick={onOpenProjects}><FolderOpen size={14} /> All projects</button>}
+          {onSignOut && <button type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button>}
+        </div>}
         <div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div>
         <p className="eyebrow">MULTICAM · WEBMCP-NATIVE POST-PRODUCTION</p>
-        <h1>Build the edit from every angle.</h1>
-        <p className="welcome-copy">Add the host, guest, screen share, and B-roll together. OpenCast stores the originals, prepares clean audio, transcribes each angle, and opens the editor as soon as the first transcript is ready.</p>
+        <h1>Upload your recordings.</h1>
+        <p className="welcome-copy">Choose a podcast recording or every angle at once. OpenCast identifies audio and video sources, stores the originals, prepares clean audio, and opens the editor as soon as the first transcript is ready.</p>
 
-        <div className="upload-grid">
+        <div className="upload-grid media-only">
           <button className="upload-card" onClick={() => mediaInput.current?.click()} type="button" disabled={importing}>
             {importing ? <LoaderCircle className="spin" /> : <CloudUpload />}
-            <span>{sources.length ? "Add more recordings" : "Choose podcast recordings"}</span>
-            <small>Select one file or every angle at once. Processing starts automatically.</small>
-          </button>
-          <button className="upload-card" onClick={() => transcriptInput.current?.click()} type="button" disabled={busy !== null}>
-            {busy === "transcript" ? <LoaderCircle className="spin" /> : <FileText />}
-            <span>Import transcript</span>
-            <small>SRT, VTT, or time-coded JSON</small>
+            <span>{sources.length ? "Add more recordings" : "Choose audio or video files"}</span>
+            <small>MP4, MOV, WebM, MP3, M4A, WAV and more. Select all angles together; processing starts automatically.</small>
           </button>
         </div>
 
@@ -132,10 +88,7 @@ export function UploadScreen() {
           </section>
         )}
 
-        <div className="welcome-actions">
-          <button className="text-button" type="button" onClick={loadSample} disabled={busy !== null || importing}>Try the sample transcript <Upload size={14} /></button>
-          <span>Large originals upload directly to project storage · all media is transcribed by the media worker</span>
-        </div>
+        <p className="media-upload-note">Large originals upload directly to project storage · all media is transcribed by the media worker</p>
         {transcription.stage === "error" && (
           <div className={`transcription-progress ${transcription.stage === "error" ? "error" : ""}`}>
             <div className="transcription-progress-icon"><CloudUpload size={18} /></div>
@@ -151,9 +104,8 @@ export function UploadScreen() {
           event.currentTarget.value = "";
           if (files.length) void loadMedia(files);
         }} />
-        <input ref={transcriptInput} className="sr-only" type="file" accept=".srt,.vtt,.json,application/json,text/vtt" onChange={(event) => event.target.files?.[0] && void loadTranscriptFile(event.target.files[0])} />
       </section>
-      <p className="welcome-footnote">Direct multipart storage · source-aware transcript timing · OpenAI transcription.</p>
+      <p className="welcome-footnote">Direct multipart storage · source-aware transcript timing · automatic OpenAI transcription.</p>
     </main>
   );
 }
