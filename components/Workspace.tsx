@@ -161,6 +161,9 @@ function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, o
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const totalSources = projects.reduce((total, project) => total + project.sourceCount, 0);
+  const totalDuration = projects.reduce((total, project) => total + project.duration, 0);
+  const editedProjects = projects.filter((project) => project.wordCount > 0).length;
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
@@ -197,17 +200,39 @@ function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, o
 
   return (
     <main className="library-shell">
+      <span className="ambient-orb library-orb-one" aria-hidden="true" />
+      <span className="ambient-orb library-orb-two" aria-hidden="true" />
       <section className="library-card">
         <header className="library-topbar"><div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div><div><span className={`workspace-connection ${webMcpAvailable ? "live" : ""}`}>{webMcpAvailable ? "Agent connected" : "Workspace"}</span><button className="sign-out" type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button></div></header>
-        <div className="library-heading"><div><p className="eyebrow">PRIVATE PROJECT LIBRARY</p><h1>Pick up where you left off.</h1><p>Projects save their transcript, edit decisions, source roles, and Blob references in this browser. Originals stay in project media storage.</p></div><FolderOpen size={30} /></div>
-        <form className="new-project" onSubmit={create}><input aria-label="New project title" placeholder="New podcast project" value={title} onChange={(event) => setTitle(event.target.value)} /><button type="submit" disabled={busyId === "new"}>{busyId === "new" ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} New project</button></form>
-        {(error || actionError) && <p className="form-error">{actionError || error}</p>}
-        {loading ? <div className="library-loading"><LoaderCircle className="spin" /> Loading your projects…</div> : projects.length ? <div className="project-grid">{projects.map((project) => <article className="project-card" key={project.id}>
-          {editingId === project.id ? <div className="project-rename"><input autoFocus value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} /><button type="button" onClick={() => void saveRename(project.id)} disabled={busyId === project.id}>Save</button><button type="button" onClick={() => setEditingId(null)}>Cancel</button></div> : <>
-            <div><p>{project.sourceCount ? `${project.sourceCount} source${project.sourceCount === 1 ? "" : "s"}` : "Transcript project"}</p><h2>{project.title}</h2><small>Edited {formatDate(project.updatedAt)} · {project.wordCount.toLocaleString()} words · {formatDuration(project.duration)}</small></div>
-            <footer><button className="project-open" type="button" onClick={() => void open(project.id)} disabled={busyId === project.id}>{busyId === project.id ? <LoaderCircle className="spin" size={14} /> : "Open project"}</button><button className="project-icon" type="button" aria-label={`Rename ${project.title}`} onClick={() => { setEditingId(project.id); setEditingTitle(project.title); }}><Pencil size={14} /></button><button className="project-icon danger" type="button" aria-label={`Delete ${project.title}`} onClick={() => void remove(project.id)}><Trash2 size={14} /></button></footer>
-          </>}
-        </article>)}</div> : <section className="library-empty"><FolderOpen size={24} /><h2>Create your first project.</h2><p>Start a project, upload your recordings, and OpenCast will preserve the editable transcript here.</p><button type="button" onClick={() => void onCreate("Untitled podcast")}>Create project <Plus size={14} /></button></section>}
+        <div className="library-layout">
+          <div className="library-main">
+            <div className="library-heading"><div><p className="eyebrow">YOUR STUDIO</p><h1>Make the next cut.</h1><p>Your projects, sources, and edits — together.</p></div><FolderOpen size={30} /></div>
+            <form className="new-project" onSubmit={create}><input aria-label="New project title" placeholder="Name a new project" value={title} onChange={(event) => setTitle(event.target.value)} /><button type="submit" disabled={busyId === "new"}>{busyId === "new" ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} New project</button></form>
+            {(error || actionError) && <p className="form-error">{actionError || error}</p>}
+            <div className="library-section-heading"><span>Projects</span><small>{loading ? "Syncing…" : `${projects.length} saved`}</small></div>
+            {loading ? <div className="library-loading"><LoaderCircle className="spin" /> Loading your projects…</div> : projects.length ? <div className="project-grid">{projects.map((project) => <article className="project-card" key={project.id}>
+              {editingId === project.id ? <div className="project-rename"><input autoFocus value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} /><button type="button" onClick={() => void saveRename(project.id)} disabled={busyId === project.id}>Save</button><button type="button" onClick={() => setEditingId(null)}>Cancel</button></div> : <>
+                <div><p>{project.sourceCount ? `${project.sourceCount} source${project.sourceCount === 1 ? "" : "s"}` : "Ready for media"}</p><h2>{project.title}</h2><small>Edited {formatDate(project.updatedAt)} · {project.wordCount.toLocaleString()} words · {formatDuration(project.duration)}</small></div>
+                <footer><button className="project-open" type="button" onClick={() => void open(project.id)} disabled={busyId === project.id}>{busyId === project.id ? <LoaderCircle className="spin" size={14} /> : "Open project"}</button><button className="project-icon" type="button" aria-label={`Rename ${project.title}`} onClick={() => { setEditingId(project.id); setEditingTitle(project.title); }}><Pencil size={14} /></button><button className="project-icon danger" type="button" aria-label={`Delete ${project.title}`} onClick={() => void remove(project.id)}><Trash2 size={14} /></button></footer>
+              </>}
+            </article>)}</div> : <section className="library-empty"><FolderOpen size={24} /><h2>Start with a recording.</h2><p>Create a project, then bring in every angle.</p><button type="button" onClick={() => void onCreate("Untitled podcast")}>Create project <Plus size={14} /></button></section>}
+          </div>
+
+          <aside className="library-rail" aria-label="Workspace summary">
+            <div className="library-visual" aria-hidden="true"><i /><i /><i /></div>
+            <p className="panel-kicker">WORKSPACE</p>
+            <h2>Editing, in motion.</h2>
+            <div className="library-metrics">
+              <span><strong>{projects.length}</strong><small>projects</small></span>
+              <span><strong>{totalSources}</strong><small>sources</small></span>
+              <span><strong>{formatDuration(totalDuration)}</strong><small>on deck</small></span>
+            </div>
+            <div className={`library-agent ${webMcpAvailable ? "live" : ""}`}>
+              <span className="library-agent-dot" aria-hidden="true" />
+              <div><strong>{webMcpAvailable ? "Agent tools are live" : "Co-editor standing by"}</strong><small>{editedProjects ? `${editedProjects} project${editedProjects === 1 ? "" : "s"} ready to refine` : "Open a project to begin"}</small></div>
+            </div>
+          </aside>
+        </div>
       </section>
     </main>
   );

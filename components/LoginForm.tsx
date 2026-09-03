@@ -36,7 +36,7 @@ export function LoginForm() {
         <div className="login-icon"><LockKeyhole size={18} /></div>
         <p className="eyebrow">PRIVATE EDITING WORKSPACE</p>
         <h1>Welcome back.</h1>
-        <p>Sign in to open your podcast projects and work with the editing agent.</p>
+        <p>Sign in to edit.</p>
         <label>Username<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label>
         <label>Password<input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
         {error && <p className="form-error">{error}</p>}

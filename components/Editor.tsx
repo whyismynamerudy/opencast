@@ -131,7 +131,7 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
           <SourceManager />
           <AgentActivityPanel webMcpAvailable={webMcpAvailable} />
           <ExportDialog />
-          <div className="editing-tip"><Scissors size={15} /><span><strong>Shared action hub</strong> — every UI action and WebMCP tool calls the same edit engine.</span></div>
+          <div className="editing-tip"><Scissors size={15} /><span><strong>Shared action hub</strong> — your edits and the agent stay in sync.</span></div>
           <div className="project-summary"><span>{words.length} words</span><span>{sourceCount} source{sourceCount === 1 ? "" : "s"}</span><span>{formatTime(duration)} master</span><span>{formatTime(Math.max(0, duration - cuts.reduce((sum, cut) => sum + cut.end - cut.start, 0)))} final</span></div>
           </div>
         </aside>

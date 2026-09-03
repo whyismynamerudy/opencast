@@ -26,13 +26,13 @@ export function AgentActivityPanel({ webMcpAvailable }: { webMcpAvailable: boole
         <div><p className="panel-kicker">AGENT ACTIVITY</p><h2>Co-editor</h2></div>
         <span className={`connection ${webMcpAvailable ? "live" : ""}`}><Radio size={12} />{webMcpAvailable ? "WebMCP live" : "Preview mode"}</span>
       </div>
-      <p className="agent-copy">{webMcpAvailable ? "Your browser exposed OpenCast’s tools to the agent." : "Open in a WebMCP-enabled browser to expose the live tool surface."}</p>
+      <p className="agent-copy">{webMcpAvailable ? "Shared controls are live." : "Awaiting a WebMCP browser."}</p>
       <div className="tool-chips">
         <button type="button" onClick={() => demoTool("remove_fillers")}><Sparkles size={13} /> Test remove_fillers</button>
         <button type="button" onClick={() => demoTool("remove_silences")}><Sparkles size={13} /> Test remove_silences</button>
       </div>
       <div className="activity-list" aria-live="polite">
-        {!activity.length && <div className="activity-empty">Waiting for your first edit or agent tool call.</div>}
+        {!activity.length && <div className="activity-empty">Awaiting the first edit.</div>}
         {activity.map((item) => <div className={`activity-row ${item.status}`} key={item.id}>
           {item.status === "error" ? <CircleAlert size={15} /> : <CheckCircle2 size={15} />}
           <div><strong>{item.tool}</strong><span>{item.detail}</span></div>

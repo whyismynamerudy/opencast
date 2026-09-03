@@ -47,9 +47,9 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
           {onSignOut && <button type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button>}
         </div>}
         <div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div>
-        <p className="eyebrow">MULTICAM · WEBMCP-NATIVE POST-PRODUCTION</p>
+        <p className="eyebrow">MULTICAM · AGENT-READY</p>
         <h1>Upload your recordings.</h1>
-        <p className="welcome-copy">Choose a podcast recording or every angle at once. OpenCast identifies audio and video sources, stores the originals, prepares clean audio, and opens the editor as soon as the first transcript is ready.</p>
+        <p className="welcome-copy">Add one recording or every angle. Processing starts automatically.</p>
 
         <div className="upload-grid media-only">
           <button className="upload-card" onClick={() => mediaInput.current?.click()} type="button" disabled={importing}>
@@ -70,7 +70,7 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
               </div>
               {allSourcesReady ? <CheckCircle2 size={20} /> : <LoaderCircle className="spin" size={20} />}
             </header>
-            <p>{allSourcesReady ? "OpenCast has a time-coded transcript and speaker labels ready for editing." : activeSources.length > 1 ? "Each recording uploads and transcribes in the background. You can start editing as soon as the first angle is ready." : "This happens automatically — keep this tab open while we prepare the transcript."}</p>
+            <p>{allSourcesReady ? "Transcript and speakers are ready." : activeSources.length > 1 ? "Uploading and transcribing in the background. Your editor opens with the first source." : "Uploading and transcribing. Keep this tab open."}</p>
             <div className="processing-progress" role="progressbar" aria-label="Overall media processing progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overallProgress}><span style={{ width: `${overallProgress}%` }} /></div>
             <div className="source-ingest-list">
               {sources.map((source) => (
@@ -88,7 +88,7 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
           </section>
         )}
 
-        <p className="media-upload-note">Large originals upload directly to project storage · all media is transcribed by the media worker</p>
+        <p className="media-upload-note">Direct-to-storage uploads · automatic transcription</p>
         {transcription.stage === "error" && (
           <div className={`transcription-progress ${transcription.stage === "error" ? "error" : ""}`}>
             <div className="transcription-progress-icon"><CloudUpload size={18} /></div>
@@ -105,7 +105,7 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
           if (files.length) void loadMedia(files);
         }} />
       </section>
-      <p className="welcome-footnote">Direct multipart storage · source-aware transcript timing · automatic OpenAI transcription.</p>
+      <p className="welcome-footnote">Source-aware timing · cloud transcription</p>
     </main>
   );
 }
