@@ -19,13 +19,27 @@ function formatDuration(seconds: number): string {
   return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
-export function Workspace() {
+/** Reflect the open project in the address bar without remounting the app. */
+function syncProjectUrl(id: string | null, replace = false) {
+  const path = id ? `/project/${encodeURIComponent(id)}` : "/";
+  if (window.location.pathname === path) return;
+  if (replace) window.history.replaceState(null, "", path);
+  else window.history.pushState(null, "", path);
+}
+
+function projectIdFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/project\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+export function Workspace({ initialProjectId }: { initialProjectId?: string }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(initialProjectId ?? null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
   const saveTimer = useRef<number | null>(null);
+  const bootedRef = useRef(false);
   const webMcpAvailable = useWebMCP();
 
   const refresh = useCallback(async () => {
@@ -50,6 +64,7 @@ export function Workspace() {
     activeProjectIdRef.current = project.id;
     useEditorStore.getState().loadProjectSnapshot(project.snapshot);
     setActiveProjectId(project.id);
+    syncProjectUrl(project.id);
     return projectSummary(project);
   }, [persistActive]);
 
@@ -59,6 +74,7 @@ export function Workspace() {
     activeProjectIdRef.current = project.id;
     useEditorStore.getState().loadProjectSnapshot(project.snapshot);
     setActiveProjectId(project.id);
+    syncProjectUrl(project.id);
     await refresh();
     return projectSummary(project);
   }, [persistActive, refresh]);
@@ -77,9 +93,48 @@ export function Workspace() {
       activeProjectIdRef.current = null;
       setActiveProjectId(null);
       useEditorStore.getState().resetProject();
+      syncProjectUrl(null, true);
     }
     await refresh();
   }, [refresh]);
+
+  // Deep link: a hard load of /project/<id> hydrates that project from
+  // IndexedDB, or falls back to the library when the id is unknown here.
+  useEffect(() => {
+    if (bootedRef.current) return;
+    bootedRef.current = true;
+    if (!initialProjectId) return;
+    // One-time hydration from IndexedDB (an external system); state updates
+    // land in async callbacks after the lookup resolves, not synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void openProject(initialProjectId).catch(() => {
+      activeProjectIdRef.current = null;
+      setActiveProjectId(null);
+      syncProjectUrl(null, true);
+      setError("That project is not saved in this browser, so the library is shown instead.");
+    });
+  }, [initialProjectId, openProject]);
+
+  // Browser back/forward moves between the library and project URLs.
+  useEffect(() => {
+    const onPopState = () => {
+      const id = projectIdFromPath(window.location.pathname);
+      if (id && id !== activeProjectIdRef.current) {
+        void openProject(id).catch(() => {
+          activeProjectIdRef.current = null;
+          setActiveProjectId(null);
+          syncProjectUrl(null, true);
+        });
+      } else if (!id && activeProjectIdRef.current) {
+        void persistActive();
+        activeProjectIdRef.current = null;
+        setActiveProjectId(null);
+        void refresh();
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [openProject, persistActive, refresh]);
 
   useEffect(() => {
     // IndexedDB is an external browser service. This one-time hydration does
@@ -126,6 +181,7 @@ export function Workspace() {
       await persistActive();
       activeProjectIdRef.current = null;
       setActiveProjectId(null);
+      syncProjectUrl(null);
       await refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save this project.");

@@ -107,7 +107,9 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
   return (
     <main className={`editor-shell ${inspectorOpen ? "" : "inspector-closed"}`}>
       <header className="topbar">
-        <Link className="brand-lockup" href="/" aria-label="OpenCast home"><span className="brand-mark">◒</span><span>OpenCast</span></Link>
+        {onOpenProjects
+          ? <button type="button" className="brand-lockup" aria-label="All projects" onClick={onOpenProjects}><span className="brand-mark">◒</span><span>OpenCast</span></button>
+          : <Link className="brand-lockup" href="/" aria-label="OpenCast home"><span className="brand-mark">◒</span><span>OpenCast</span></Link>}
         <div className="project-name"><span className="project-dot" />{projectTitle || mediaName || "Untitled transcript"}<small>{sourceCount > 1 ? `${sourceCount} synchronized sources` : transcription.stage === "complete" ? "cloud transcript + speakers" : "cloud project"}</small></div>
         <div className="topbar-actions">
           {onOpenProjects && <button type="button" className="toolbar-button project-library-button" title="All projects" onClick={onOpenProjects}><FolderOpen size={16} /> Projects</button>}
