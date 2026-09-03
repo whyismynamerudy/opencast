@@ -61,7 +61,7 @@ export function SourceManager() {
         ))}
       </div>
       {active && <button type="button" className="program-cut-button" onClick={useCurrentAngle} disabled={programEnd - playbackTime < 0.04}><Scissors size={14} /> Cut to {active.role} from {formatTime(playbackTime)}</button>}
-      {sourceUploadRequest && <p className="source-agent-request"><SlidersHorizontal size={14} /> Agent requested {sourceUploadRequest.roles.join(", ")}; use + to choose the local files.</p>}
+      {sourceUploadRequest && <p className="source-agent-request"><SlidersHorizontal size={14} /> Upload slots ready for {sourceUploadRequest.roles.join(", ")} — use + to choose the files.</p>}
       <input ref={input} className="sr-only" type="file" multiple accept="audio/*,video/*" onChange={(event) => {
         const files = Array.from(event.currentTarget.files ?? []);
         event.currentTarget.value = "";

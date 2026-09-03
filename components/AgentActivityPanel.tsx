@@ -12,12 +12,12 @@ export function AgentActivityPanel({ webMcpAvailable }: { webMcpAvailable: boole
   return (
     <aside className="agent-panel">
       <div className="agent-heading">
-        <div><p className="panel-kicker">Agent</p><h2>Co-editor</h2></div>
-        <span className={`connection ${webMcpAvailable ? "live" : ""}`}><Radio size={12} />{webMcpAvailable ? "Live" : "Offline"}</span>
+        <div><p className="panel-kicker">Log</p><h2>On the record</h2></div>
+        <span className={`connection ${webMcpAvailable ? "live" : ""}`}><Radio size={12} />WebMCP</span>
       </div>
-      <p className="agent-copy">{toolNames.length} tools on this page{webMcpAvailable ? "" : " — open in a WebMCP browser to use them"}.</p>
+      <p className="agent-copy">{toolNames.length} actions exposed through WebMCP.</p>
       <details className="tool-index">
-        <summary>Tool surface</summary>
+        <summary>Action surface</summary>
         <div>{toolNames.map((name) => <span key={name}>{name}</span>)}</div>
       </details>
       <div className="activity-list" aria-live="polite">

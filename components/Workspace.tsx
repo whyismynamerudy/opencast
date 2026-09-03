@@ -140,14 +140,13 @@ export function Workspace() {
 
   if (activeProjectId) return <Editor onOpenProjects={() => void returnToProjects()} onSignOut={() => void signOut()} webMcpAvailable={webMcpAvailable} />;
 
-  return <ProjectLibrary projects={projects} loading={loading} error={error} onCreate={createAndOpen} onOpen={openProject} onRename={rename} onDelete={remove} onSignOut={signOut} webMcpAvailable={webMcpAvailable} />;
+  return <ProjectLibrary projects={projects} loading={loading} error={error} onCreate={createAndOpen} onOpen={openProject} onRename={rename} onDelete={remove} onSignOut={signOut} />;
 }
 
 type ProjectLibraryProps = {
   projects: ProjectSummary[];
   loading: boolean;
   error: string | null;
-  webMcpAvailable: boolean;
   onCreate: (title?: string) => Promise<ProjectSummary>;
   onOpen: (id: string) => Promise<ProjectSummary>;
   onRename: (id: string, title: string) => Promise<ProjectSummary>;
@@ -155,7 +154,7 @@ type ProjectLibraryProps = {
   onSignOut: () => void;
 };
 
-function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, onOpen, onRename, onDelete, onSignOut }: ProjectLibraryProps) {
+function ProjectLibrary({ projects, loading, error, onCreate, onOpen, onRename, onDelete, onSignOut }: ProjectLibraryProps) {
   const [title, setTitle] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -200,7 +199,7 @@ function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, o
 
   return (
     <main className="library-shell">
-      <header className="library-topbar"><div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div><div><span className={`workspace-connection ${webMcpAvailable ? "live" : ""}`}>{webMcpAvailable ? "Agent connected" : "Workspace"}</span><button className="sign-out" type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button></div></header>
+      <header className="library-topbar"><div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div><div><button className="sign-out" type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button></div></header>
       <section className="library-card">
         <div className="library-header">
           <div><p className="eyebrow">Workspace</p><h1>Projects</h1></div>
@@ -212,7 +211,6 @@ function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, o
           <span>{totalSources} source{totalSources === 1 ? "" : "s"}</span>
           <span>{formatDuration(totalDuration)} on deck</span>
           {editedProjects > 0 && <span>{editedProjects} in the edit</span>}
-          <span className={`library-agent ${webMcpAvailable ? "live" : ""}`}><i className="library-agent-dot" aria-hidden="true" />{webMcpAvailable ? "Co-editor live" : "Co-editor standing by"}</span>
         </div>
         {loading ? <div className="library-loading"><LoaderCircle className="spin" /> Loading your projects…</div> : projects.length ? <div className="project-grid">{projects.map((project) => <article className="project-card" key={project.id}>
           {editingId === project.id ? <div className="project-rename"><input autoFocus value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} /><button type="button" onClick={() => void saveRename(project.id)} disabled={busyId === project.id}>Save</button><button type="button" onClick={() => setEditingId(null)}>Cancel</button></div> : <>

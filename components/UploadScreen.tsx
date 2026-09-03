@@ -59,7 +59,7 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
           </button>
         </div>
 
-        {sourceUploadRequest && <p className="upload-request"><Film size={15} /> An agent prepared slots for {sourceUploadRequest.roles.join(", ")}. Choose those local files to attach them to this live project.</p>}
+        {sourceUploadRequest && <p className="upload-request"><Film size={15} /> Upload slots are ready for {sourceUploadRequest.roles.join(", ")} — choose the matching local files.</p>}
 
         {sources.length > 0 && (
           <section className="processing-queue" aria-live="polite">

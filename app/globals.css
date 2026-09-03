@@ -190,7 +190,7 @@ h1, .library-header h1, .login-card h1 {
 }
 
 /* status tag */
-.workspace-connection, .connection {
+.connection {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -205,14 +205,8 @@ h1, .library-header h1, .login-card h1 {
   text-transform: uppercase;
   white-space: nowrap;
 }
-.workspace-connection.live, .connection.live { color: var(--ink); border-color: var(--accent); }
-.workspace-connection.live::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  background: var(--accent);
-  animation: on-air 1.8s var(--ease-out) infinite;
-}
+.connection.live { color: var(--ink); border-color: var(--accent); }
+.connection.live svg { color: var(--accent); animation: on-air 1.8s var(--ease-out) infinite; }
 @keyframes on-air { 50% { opacity: 0.35; } }
 
 /* ════════════════════════════════════════════════════════════
@@ -440,7 +434,6 @@ h1, .library-header h1, .login-card h1 {
 .library-strip > span { display: inline-flex; align-items: center; gap: 8px; padding: 0 18px; border-right: var(--hair) solid var(--rule); }
 .library-strip > span:first-child { padding-left: 2px; }
 .library-strip > span:last-child { border-right: 0; }
-.library-strip .library-agent { margin-left: auto; color: var(--ink-2); }
 
 .library-loading, .library-empty {
   display: grid;
@@ -510,8 +503,6 @@ h1, .library-header h1, .login-card h1 {
 .project-rename button { padding: 9px 11px; color: var(--ink); border: var(--hair) solid var(--rule-2); background: transparent; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
 .project-rename button:hover { border-color: var(--ink); }
 
-.library-agent-dot { width: 7px; height: 7px; flex: none; background: var(--rule-2); }
-.library-agent.live .library-agent-dot { background: var(--accent); animation: on-air 1.8s var(--ease-out) infinite; }
 
 /* ════════════════════════════════════════════════════════════
    EDITOR SHELL
@@ -934,7 +925,6 @@ h1, .library-header h1, .login-card h1 {
 @media (max-width: 860px) {
   .library-header { flex-direction: column; align-items: stretch; gap: 20px; }
   .new-project { width: 100%; }
-  .library-strip .library-agent { margin-left: 0; }
 }
 
 @media (max-width: 650px) {
