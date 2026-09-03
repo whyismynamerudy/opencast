@@ -39,7 +39,6 @@ export function LoginForm() {
         <label>Password<input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
         {error && <p className="form-error">{error}</p>}
         <button className="login-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : <>Enter workspace <ArrowRight size={15} /></>}</button>
-        <small>Demo credentials: <code>admin</code> / <code>admin</code></small>
       </form>
     </main>
   );

@@ -200,8 +200,8 @@ function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, o
 
   return (
     <main className="library-shell">
+      <header className="library-topbar"><div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div><div><span className={`workspace-connection ${webMcpAvailable ? "live" : ""}`}>{webMcpAvailable ? "Agent connected" : "Workspace"}</span><button className="sign-out" type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button></div></header>
       <section className="library-card">
-        <header className="library-topbar"><div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div><div><span className={`workspace-connection ${webMcpAvailable ? "live" : ""}`}>{webMcpAvailable ? "Agent connected" : "Workspace"}</span><button className="sign-out" type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button></div></header>
         <div className="library-layout">
           <div className="library-main">
             <div className="library-heading"><div><p className="eyebrow">Projects</p><h1>Make the next cut.</h1></div></div>
