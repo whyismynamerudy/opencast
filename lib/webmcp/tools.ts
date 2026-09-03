@@ -95,12 +95,12 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
     },
     {
       name: "delete_project",
-      description: "Permanently remove a saved project record from this browser. It does not delete the original media from Fly storage. This is destructive and requires explicit confirmation.",
+      description: "Permanently delete a saved project and its uploaded Fly media. This is destructive and requires explicit confirmation.",
       inputSchema: objectSchema({ project_id: { type: "string", minLength: 1 }, confirm: { type: "boolean", const: true } }, ["project_id", "confirm"]),
       execute: run("delete_project", async (args) => {
         if (args.confirm !== true) throw new Error("Set confirm to true only after the person approves deleting this project.");
         await getProjectRuntime().delete(String(args.project_id ?? ""));
-        return { projectId: String(args.project_id ?? ""), message: "Deleted saved project record. Original Fly media was retained." };
+        return { projectId: String(args.project_id ?? ""), message: "Deleted project and its uploaded Fly media." };
       }),
     },
     {

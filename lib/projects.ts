@@ -1,7 +1,7 @@
 import { blankProjectSnapshot, type ProjectSnapshot } from "@/lib/store";
 
-const DATABASE = "opencast-project-library";
-const STORE = "projects";
+const LEGACY_DATABASE = "opencast-project-library";
+const PROJECT_ID = /^[a-zA-Z0-9-]{16,}$/;
 
 export type SavedProject = {
   id: string;
@@ -17,39 +17,17 @@ export type ProjectSummary = Pick<SavedProject, "id" | "title" | "createdAt" | "
   duration: number;
 };
 
-function database(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") return Promise.reject(new Error("This browser does not support local project storage."));
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath: "id" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Could not open the project library."));
-  });
-}
-
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Project storage request failed."));
-  });
-}
-
-function transactionComplete(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error || new Error("Could not save the project."));
-    transaction.onabort = () => reject(transaction.error || new Error("Project save was cancelled."));
-  });
-}
-
 function normalizedTitle(value: string | undefined): string {
   return value?.trim().slice(0, 120) || "Untitled podcast";
 }
 
-function cloneProject(project: SavedProject): SavedProject {
-  return structuredClone(project);
+async function projectRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body) headers.set("content-type", "application/json");
+  const response = await fetch(path, { ...init, headers, cache: "no-store" });
+  const body = await response.json().catch(() => ({})) as { error?: string } & T;
+  if (!response.ok) throw new Error(body.error || "Project storage is unavailable.");
+  return body;
 }
 
 export function projectSummary(project: SavedProject): ProjectSummary {
@@ -65,77 +43,92 @@ export function projectSummary(project: SavedProject): ProjectSummary {
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
-  const db = await database();
-  const transaction = db.transaction(STORE, "readonly");
-  const records = await requestResult(transaction.objectStore(STORE).getAll()) as SavedProject[];
-  await transactionComplete(transaction);
-  return records
-    .filter((record) => record?.id && record.snapshot?.version === 1)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .map(projectSummary);
+  const body = await projectRequest<{ projects?: ProjectSummary[] }>("/api/projects");
+  return Array.isArray(body.projects) ? body.projects : [];
 }
 
 export async function getProject(id: string): Promise<SavedProject | null> {
-  const db = await database();
-  const transaction = db.transaction(STORE, "readonly");
-  const record = await requestResult(transaction.objectStore(STORE).get(id) as IDBRequest<SavedProject | undefined>);
-  await transactionComplete(transaction);
-  return record?.snapshot?.version === 1 ? cloneProject(record) : null;
+  if (!PROJECT_ID.test(id)) return null;
+  try {
+    const body = await projectRequest<{ project?: SavedProject }>(`/api/projects/${encodeURIComponent(id)}`);
+    return body.project?.snapshot?.version === 1 ? body.project : null;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Project not found.") return null;
+    throw error;
+  }
 }
 
 export async function createProject(title?: string): Promise<SavedProject> {
-  const now = Date.now();
   const projectTitle = normalizedTitle(title);
   const project: SavedProject = {
     id: crypto.randomUUID(),
     title: projectTitle,
-    createdAt: now,
-    updatedAt: now,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
     snapshot: blankProjectSnapshot(projectTitle),
   };
-  await saveProject(project);
-  return project;
+  const body = await projectRequest<{ project?: SavedProject }>("/api/projects", { method: "POST", body: JSON.stringify(project) });
+  if (!body.project) throw new Error("Project storage did not create the project.");
+  return body.project;
 }
 
-export async function saveProject(project: SavedProject): Promise<void> {
-  const db = await database();
-  const transaction = db.transaction(STORE, "readwrite");
-  transaction.objectStore(STORE).put(cloneProject(project));
-  await transactionComplete(transaction);
+export async function saveProject(project: SavedProject): Promise<SavedProject | null> {
+  if (!PROJECT_ID.test(project.id)) throw new Error("A valid project id is required.");
+  try {
+    const body = await projectRequest<{ project?: SavedProject }>(`/api/projects/${encodeURIComponent(project.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(project),
+    });
+    return body.project ?? null;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Project not found.") return null;
+    throw error;
+  }
 }
 
 export async function saveProjectSnapshot(id: string, snapshot: ProjectSnapshot): Promise<SavedProject | null> {
   const existing = await getProject(id);
   if (!existing) return null;
   const title = normalizedTitle(snapshot.projectTitle || existing.title);
-  const next: SavedProject = {
+  return saveProject({
     ...existing,
     title,
-    updatedAt: Date.now(),
     snapshot: { ...structuredClone(snapshot), projectTitle: title },
-  };
-  await saveProject(next);
-  return next;
+  });
 }
 
 export async function renameProject(id: string, title: string): Promise<SavedProject | null> {
   const existing = await getProject(id);
   if (!existing) return null;
   const nextTitle = normalizedTitle(title);
-  const next: SavedProject = {
+  return saveProject({
     ...existing,
     title: nextTitle,
-    updatedAt: Date.now(),
     snapshot: { ...existing.snapshot, projectTitle: nextTitle },
-  };
-  await saveProject(next);
-  return next;
+  });
 }
 
 export async function deleteProject(id: string): Promise<boolean> {
-  const db = await database();
-  const transaction = db.transaction(STORE, "readwrite");
-  transaction.objectStore(STORE).delete(id);
-  await transactionComplete(transaction);
-  return true;
+  if (!PROJECT_ID.test(id)) return false;
+  try {
+    await projectRequest<{ deleted?: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Project not found.") return false;
+    throw error;
+  }
+}
+
+/**
+ * Projects used to be browser-local. Deliberately remove that abandoned store
+ * instead of presenting a confusing second library beside the Fly-backed one.
+ */
+export async function discardLegacyBrowserProjects(): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(LEGACY_DATABASE);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error("Could not remove legacy browser projects."));
+    request.onblocked = () => reject(new Error("Close older OpenCast tabs to remove legacy browser projects."));
+  });
 }

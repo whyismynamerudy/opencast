@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { issueWorkerJobTicket, issueWorkerMediaTicket, issueWorkerUploadTicket } from "../lib/workerTicket";
+import { issueWorkerJobTicket, issueWorkerMediaTicket, issueWorkerProjectTicket, issueWorkerUploadTicket } from "../lib/workerTicket";
 
 process.env.OPENCAST_WORKER_SIGNING_SECRET = "test-worker-signing-secret";
 
@@ -25,5 +25,11 @@ const mediaTicket = issueWorkerMediaTicket(sourceId);
 const mediaClaim = JSON.parse(Buffer.from(mediaTicket.split(".")[0], "base64url").toString("utf8"));
 assert.equal(mediaClaim.kind, "media");
 assert.equal(mediaClaim.sourceId, sourceId);
+
+const projectTicket = issueWorkerProjectTicket();
+const projectClaim = JSON.parse(Buffer.from(projectTicket.split(".")[0], "base64url").toString("utf8"));
+assert.equal(projectClaim.kind, "project");
+assert.ok(projectClaim.expiresAt > Date.now());
+assert.equal("sourceId" in projectClaim, false);
 
 console.log("worker ticket tests passed");

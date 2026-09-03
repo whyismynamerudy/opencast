@@ -8,7 +8,7 @@ It is designed for ChatGPT Desktop’s built-in browser: a person sees and contr
 
 OpenCast now has a deliberately simple single-admin workspace. Sign in with **`admin` / `admin`**; the credential check and session-cookie issuance happen on the Next.js backend, and media-upload/job-ticket endpoints require that session too. This is suitable for a private demo only, not a real authentication system. Set `OPENCAST_AUTH_SECRET` in Vercel so the HttpOnly session signature is unique to your deployment.
 
-After sign-in, the project library lets you create, open, rename, and delete editing projects. Project snapshots are stored in the signed-in browser's IndexedDB, which is appropriate for this single-user deployment and comfortably holds large transcripts. A snapshot includes words, edits, speaker/source metadata, and Fly media source keys; it intentionally never stores a local `File` or full HD original in browser project storage. Originals remain on the mounted Fly volume.
+After sign-in, the project library lets you create, open, rename, and delete editing projects from any browser. Project snapshots live in a SQLite database on the mounted Fly volume; the authenticated Next.js app proxies project requests to that store, so ChatGPT Desktop and a normal browser see the same library. A snapshot includes words, edits, speaker/source metadata, and Fly media source keys; it intentionally never stores a local `File` or full HD original. Deleting a project also deletes its originals and job checkpoints from Fly.
 
 ## What is implemented
 
@@ -16,7 +16,7 @@ After sign-in, the project library lets you create, open, rename, and delete edi
 - A shared master timeline. Source transcripts retain native source times while the editor, agent tools, cuts, and program-angle selections use synchronized master times.
 - Transcript edits: select/cut/restore words, remove fillers and silence, split, trim, undo/redo, speaker labels, SRT export, and local single-source MP4/MP3 export.
 - A direct browser-to-Fly resumable upload path. The browser sends 16 MiB chunks straight to the worker volume, so a 60-minute HD source never passes through a Next.js request or needs to be loaded into server memory.
-- An included Docker media worker for long sources. It reads the original from Fly disk, creates one low-bitrate audio file, then runs diarization and word timing concurrently. Oversized compressed audio falls back to bounded segments. Transient API/upload failures retry automatically, while durable checkpoints make a manual retry resume instead of starting over.
+- An included Docker media worker for long sources. It reads the original from Fly disk and directly creates duration-bounded low-bitrate audio chunks, then runs diarization and word timing concurrently. Transient API/upload failures retry automatically, while durable checkpoints make a manual retry resume instead of starting over.
 - A WebMCP editing surface with source upload requests, source listing/role/sync control, worker-job queueing and status, source transcript reads, program-cut proposal/application, and all original text-editing controls.
 
 The source-aware program timeline is complete and shared between the person and agent. Multicam MP4/MP3 rendering is deliberately routed to a worker instead of browser ffmpeg.wasm; the current UI blocks accidental local multicam renders and continues to support SRT export. This keeps the hackathon app responsive with hour-long HD originals while leaving server rendering as the next production worker task.
@@ -36,7 +36,7 @@ local files chosen in OpenCast
                                      OpenCast master timeline + WebMCP tools
 ```
 
-The worker avoids an in-memory copy of the original. It writes the browser’s resumable chunks directly to the mounted Fly volume and converts the completed source to 16 kHz mono Ogg/Opus at 24 kbps. If that audio is at or below the 20 MiB safety limit, it makes just two concurrent transcription requests—one for speakers and one for word timing. That covers roughly two hours of podcast audio. Larger compressed inputs fall back to five-minute chunks, still with only two requests in flight at once. Originals remain available for later preview; completed jobs retain only their compact result, while failed/in-progress jobs retain their audio and checkpoints for up to 24 hours. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
+The worker avoids an in-memory copy of the original. It writes the browser’s resumable chunks directly to the mounted Fly volume and converts the completed source to 16 kHz mono Ogg/Opus in 15-minute chunks by default (configurable from one to 20 minutes). Each chunk makes two concurrent transcription requests—one for speakers and one for word timing—and stays below the model duration limit even when a whole episode compresses to a small file. Originals remain available for later preview; completed jobs retain only their compact result, while failed/in-progress jobs retain their audio and checkpoints for up to 24 hours. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
 
 ## Quick start: transcript/editor only
 

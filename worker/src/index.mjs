@@ -17,6 +17,7 @@ import {
   singleAudioLimitBytes,
   transcriptionSegmentSeconds,
 } from "./mediaPlan.mjs";
+import { openProjectStore } from "./projectStore.mjs";
 import { isRetryableStatus, withTransientRetries } from "./retry.mjs";
 
 const run = promisify(execFile);
@@ -27,7 +28,9 @@ const mediaRoot = join(workRoot, "opencast-media");
 const jobs = new Map();
 const pendingJobs = [];
 const activeUploads = new Set();
+const deletedSourceIds = new Set();
 let processingQueue = false;
+let projectStore = null;
 const OPENAI_TRANSCRIPT_URL = "https://api.openai.com/v1/audio/transcriptions";
 const maxTranscriptionAttempts = Math.max(1, Math.min(Number(process.env.OPENCAST_TRANSCRIPTION_MAX_ATTEMPTS || 4), 8));
 const jobRetentionMs = Math.max(60 * 60 * 1000, Number(process.env.OPENCAST_JOB_RETENTION_MS || 24 * 60 * 60 * 1000));
@@ -53,12 +56,12 @@ function setCors(request, response) {
   response.setHeader("access-control-expose-headers", "upload-offset,upload-length,accept-ranges,content-range");
 }
 
-async function readJson(request) {
+async function readJson(request, maximumBytes = 1_000_000) {
   const parts = [];
   let length = 0;
   for await (const part of request) {
     length += part.length;
-    if (length > 1_000_000) throw new Error("Request body is too large.");
+    if (length > maximumBytes) throw new Error("Request body is too large.");
     parts.push(part);
   }
   return JSON.parse(Buffer.concat(parts).toString("utf8"));
@@ -80,12 +83,21 @@ function readSignedTicket(value, expectedKind) {
   } catch {
     throw new Error("Media worker job ticket is invalid.");
   }
-  if (claim?.kind !== expectedKind || typeof claim?.sourceId !== "string" || !sourceIdPattern.test(claim.sourceId)) {
+  if (claim?.kind !== expectedKind) {
     throw new Error("Media worker job ticket is invalid.");
   }
-  const maxLifetime = expectedKind === "upload" ? 25 * 60 * 60 * 1000 : expectedKind === "media" ? 3 * 60 * 60 * 1000 : 15 * 60 * 1000;
+  const maxLifetime = expectedKind === "upload"
+    ? 25 * 60 * 60 * 1000
+    : expectedKind === "media"
+      ? 3 * 60 * 60 * 1000
+      : expectedKind === "project"
+        ? 5 * 60 * 1000
+        : 15 * 60 * 1000;
   if (!Number.isFinite(claim.expiresAt) || claim.expiresAt <= Date.now() || claim.expiresAt > Date.now() + maxLifetime) {
     throw new Error("Media worker job ticket has expired.");
+  }
+  if (expectedKind !== "project" && (typeof claim.sourceId !== "string" || !sourceIdPattern.test(claim.sourceId))) {
+    throw new Error("Media worker job ticket is invalid.");
   }
   if (expectedKind === "upload") {
     if (typeof claim.filename !== "string" || !claim.filename || claim.filename.length > 255 || !Number.isSafeInteger(claim.size) || claim.size <= 0 || typeof claim.contentType !== "string" || !/^(audio|video)\//.test(claim.contentType)) {
@@ -113,6 +125,10 @@ function readUploadTicket(request) {
 
 function readMediaTicket(value) {
   return readSignedTicket(value, "media");
+}
+
+function readProjectTicket(request) {
+  return readSignedTicket(ticketFromRequest(request), "project");
 }
 
 function jobView(job) {
@@ -207,6 +223,35 @@ async function persistJob(job) {
 
 function mediaDirectory(sourceId) {
   return join(mediaRoot, sourceId);
+}
+
+function projectSourceIds(project) {
+  const sources = project?.snapshot?.mediaSources;
+  if (!Array.isArray(sources)) return [];
+  return [...new Set(sources
+    .map((source) => source?.storagePath || source?.id)
+    .filter((sourceId) => typeof sourceId === "string" && sourceIdPattern.test(sourceId)))];
+}
+
+async function deleteProjectAssets(project) {
+  const sourceIds = projectSourceIds(project);
+  if (!sourceIds.length) return;
+  const sourceSet = new Set(sourceIds);
+  sourceIds.forEach((sourceId) => deletedSourceIds.add(sourceId));
+  for (let index = pendingJobs.length - 1; index >= 0; index--) {
+    if (sourceSet.has(pendingJobs[index]?.sourceId)) pendingJobs.splice(index, 1);
+  }
+  for (const [jobId, job] of jobs) {
+    if (sourceSet.has(job.sourceId)) jobs.delete(jobId);
+  }
+  await Promise.all(sourceIds.map((sourceId) => rm(mediaDirectory(sourceId), { recursive: true, force: true })));
+  const entries = await readdir(jobRoot, { withFileTypes: true });
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory() || !/^[a-zA-Z0-9-]+$/.test(entry.name)) return;
+    const path = join(jobRoot, entry.name);
+    const job = await readJsonFile(join(path, "job.json"));
+    if (sourceSet.has(job?.sourceId)) await rm(path, { recursive: true, force: true });
+  }));
 }
 
 function uploadManifestPath(sourceId) {
@@ -373,6 +418,11 @@ function streamMedia(request, response, media) {
   }
   response.writeHead(206, { ...baseHeaders, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${total}` });
   createReadStream(media.path, { start, end }).pipe(response);
+}
+
+function currentProjectStore() {
+  if (!projectStore) throw new Error("Project storage is still starting.");
+  return projectStore;
 }
 
 async function inputPathsFromManifest(manifest, outputDirectory) {
@@ -564,6 +614,7 @@ function normalizeChunks(chunks) {
 async function processJob(job) {
   const workDirectory = jobDirectory(job);
   try {
+    if (deletedSourceIds.has(job.sourceId)) return;
     job.status = "processing";
     job.error = null;
     const metrics = ensureJobMetrics(job);
@@ -577,6 +628,7 @@ async function processJob(job) {
     job.progress = 0.15;
     await persistJob(job);
     const audioInputs = await makeAudioInputs(sourcePath, workDirectory);
+    if (deletedSourceIds.has(job.sourceId)) return;
     if (!audioInputs.segments.length) throw new Error("No audio track was found in this media source.");
     metrics.compressedAudioBytes = audioInputs.audioBytes;
     metrics.audioPlan = audioInputs.plan;
@@ -590,6 +642,7 @@ async function processJob(job) {
     const totalRequests = segments.length * 2;
     let completeRequests = 0;
     for (let index = 0; index < segments.length; index++) {
+      if (deletedSourceIds.has(job.sourceId)) return;
       const chunkNumber = index + 1;
       const chunkLabel = labelForChunk(chunkNumber, segments.length);
       const diarizedPath = join(workDirectory, `chunk-${String(index).padStart(3, "0")}-diarized.json`);
@@ -665,6 +718,7 @@ async function processJob(job) {
         })());
       }
       const outcomes = await Promise.allSettled(tasks);
+      if (deletedSourceIds.has(job.sourceId)) return;
       const failed = outcomes.find((outcome) => outcome.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
       if (!diarized || !timed) throw new Error(`OpenAI did not return a complete transcription for ${chunkLabel}.`);
@@ -676,6 +730,7 @@ async function processJob(job) {
     job.progress = 0.97;
     await persistJob(job);
     const result = normalizeChunks(chunks);
+    if (deletedSourceIds.has(job.sourceId)) return;
     if (!result.words.length) throw new Error("OpenAI did not return timed words for this source.");
     job.status = "complete";
     job.stage = "complete";
@@ -760,6 +815,42 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", "http://opencast-worker.local");
   const pathname = url.pathname;
   if (request.method === "GET" && pathname === "/health") return respond(response, 200, { ok: true });
+
+  if (pathname === "/projects" && (request.method === "GET" || request.method === "POST")) {
+    try {
+      readProjectTicket(request);
+      const store = currentProjectStore();
+      if (request.method === "GET") return respond(response, 200, { projects: store.list() });
+      const project = store.create(await readJson(request, 4 * 1024 * 1024));
+      return respond(response, 201, { project });
+    } catch (error) {
+      return respond(response, 400, { error: error instanceof Error ? error.message : "Could not access project storage." });
+    }
+  }
+
+  const projectMatch = pathname.match(/^\/projects\/([a-zA-Z0-9-]+)$/);
+  if (projectMatch && (request.method === "GET" || request.method === "PUT" || request.method === "DELETE")) {
+    try {
+      readProjectTicket(request);
+      const store = currentProjectStore();
+      const id = projectMatch[1];
+      if (request.method === "GET") {
+        const project = store.get(id);
+        return project ? respond(response, 200, { project }) : respond(response, 404, { error: "Project not found." });
+      }
+      if (request.method === "DELETE") {
+        const project = store.get(id);
+        if (!project) return respond(response, 404, { error: "Project not found." });
+        await deleteProjectAssets(project);
+        store.delete(id);
+        return respond(response, 200, { deleted: true });
+      }
+      const project = store.save({ ...(await readJson(request, 4 * 1024 * 1024)), id });
+      return project ? respond(response, 200, { project }) : respond(response, 404, { error: "Project not found." });
+    } catch (error) {
+      return respond(response, 400, { error: error instanceof Error ? error.message : "Could not update project storage." });
+    }
+  }
 
   if (request.method === "POST" && pathname === "/uploads") {
     try {
@@ -869,9 +960,13 @@ const server = createServer(async (request, response) => {
 
 async function start() {
   try {
+    await mkdir(workRoot, { recursive: true });
+    projectStore = openProjectStore(workRoot);
     await restoreJobs();
   } catch (error) {
-    console.error(`Could not restore media worker jobs: ${describeError(error)}`);
+    console.error(`Could not initialize durable worker storage: ${describeError(error)}`);
+    process.exitCode = 1;
+    return;
   }
   server.listen(port, () => console.log(`OpenCast media worker listening on :${port}`));
   setInterval(() => void pruneExpiredJobs().catch((error) => console.warn(`Could not prune expired jobs: ${describeError(error)}`)), 60 * 60 * 1000).unref();

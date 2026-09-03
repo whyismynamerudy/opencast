@@ -3,9 +3,8 @@ import { redirect } from "next/navigation";
 import { AUTH_COOKIE, isAdminSession } from "@/lib/auth";
 import { Workspace } from "@/components/Workspace";
 
-// One route serves the library (/) and the editor (/project/<id>). Projects
-// live in the browser's IndexedDB, so the id is resolved client-side; the
-// server only authenticates and validates the path shape.
+// One route serves the library (/) and the editor (/project/<id>). The client
+// resolves the id through the authenticated Fly-backed project API.
 export default async function Home({ params }: { params: Promise<{ slug?: string[] }> }) {
   const cookieStore = await cookies();
   if (!isAdminSession(cookieStore.get(AUTH_COOKIE)?.value)) redirect("/login");

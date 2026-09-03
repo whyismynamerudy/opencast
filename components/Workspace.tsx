@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { FolderOpen, LoaderCircle, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { useWebMCP } from "@/hooks/useWebMCP";
-import { deleteProject, getProject, listProjects, projectSummary, renameProject, saveProjectSnapshot, createProject, type ProjectSummary } from "@/lib/projects";
+import { deleteProject, discardLegacyBrowserProjects, getProject, listProjects, projectSummary, renameProject, saveProjectSnapshot, createProject, type ProjectSummary } from "@/lib/projects";
 import { setProjectRuntime } from "@/lib/projectRuntime";
 import { useEditorStore } from "@/lib/store";
 import { Editor } from "./Editor";
@@ -60,7 +60,7 @@ export function Workspace({ initialProjectId }: { initialProjectId?: string }) {
   const openProject = useCallback(async (id: string) => {
     await persistActive();
     const project = await getProject(id);
-    if (!project) throw new Error("That project is no longer available in this browser.");
+    if (!project) throw new Error("That project is no longer available in the shared workspace.");
     activeProjectIdRef.current = project.id;
     useEditorStore.getState().loadProjectSnapshot(project.snapshot);
     setActiveProjectId(project.id);
@@ -81,7 +81,7 @@ export function Workspace({ initialProjectId }: { initialProjectId?: string }) {
 
   const rename = useCallback(async (id: string, title: string) => {
     const project = await renameProject(id, title);
-    if (!project) throw new Error("That project is no longer available in this browser.");
+    if (!project) throw new Error("That project is no longer available in the shared workspace.");
     if (activeProjectIdRef.current === id) useEditorStore.getState().createMulticamProject(project.title);
     await refresh();
     return projectSummary(project);
@@ -98,20 +98,20 @@ export function Workspace({ initialProjectId }: { initialProjectId?: string }) {
     await refresh();
   }, [refresh]);
 
-  // Deep link: a hard load of /project/<id> hydrates that project from
-  // IndexedDB, or falls back to the library when the id is unknown here.
+  // Deep link: a hard load of /project/<id> hydrates from the shared Fly
+  // project store, or falls back to the library when the id is unknown.
   useEffect(() => {
     if (bootedRef.current) return;
     bootedRef.current = true;
     if (!initialProjectId) return;
-    // One-time hydration from IndexedDB (an external system); state updates
-    // land in async callbacks after the lookup resolves, not synchronously.
+    // State updates land in async callbacks after the lookup resolves, not
+    // synchronously during rendering.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void openProject(initialProjectId).catch(() => {
       activeProjectIdRef.current = null;
       setActiveProjectId(null);
       syncProjectUrl(null, true);
-      setError("That project is not saved in this browser, so the library is shown instead.");
+      setError("That project is not in the shared workspace, so the library is shown instead.");
     });
   }, [initialProjectId, openProject]);
 
@@ -137,10 +137,12 @@ export function Workspace({ initialProjectId }: { initialProjectId?: string }) {
   }, [openProject, persistActive, refresh]);
 
   useEffect(() => {
-    // IndexedDB is an external browser service. This one-time hydration does
-    // not depend on the rendered library state, so it cannot form a render loop.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void refresh()
+    // Retire browser-only projects before loading the single shared library.
+    // A blocked deletion only means another old OpenCast tab is still open; it
+    // never prevents access to the new Fly-backed projects.
+    void discardLegacyBrowserProjects()
+      .catch((reason) => console.warn("Could not remove legacy browser projects.", reason))
+      .then(refresh)
       .catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load projects."))
       .finally(() => setLoading(false));
   }, [refresh]);
@@ -247,7 +249,7 @@ function ProjectLibrary({ projects, loading, error, onCreate, onOpen, onRename, 
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm("Delete this saved project? Its media originals will remain in Fly storage.")) return;
+    if (!window.confirm("Delete this project and its uploaded media from Fly? This cannot be undone.")) return;
     setBusyId(id);
     setActionError(null);
     try { await onDelete(id); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "Could not delete this project."); } finally { setBusyId(null); }
