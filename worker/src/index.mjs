@@ -8,7 +8,15 @@ import { Transform } from "node:stream";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { audioPlanForSize, labelForChunk, singleAudioLimitBytes } from "./mediaPlan.mjs";
+import {
+  AUDIO_INPUT_MANIFEST_VERSION,
+  audioPlanForDuration,
+  audioPlanForSize,
+  isCurrentAudioManifest,
+  labelForChunk,
+  singleAudioLimitBytes,
+  transcriptionSegmentSeconds,
+} from "./mediaPlan.mjs";
 import { isRetryableStatus, withTransientRetries } from "./retry.mjs";
 
 const run = promisify(execFile);
@@ -368,15 +376,33 @@ function streamMedia(request, response, media) {
 }
 
 async function inputPathsFromManifest(manifest, outputDirectory) {
-  if (!Array.isArray(manifest?.files) || !manifest.files.length) return null;
-  const paths = manifest.files.map((name) => join(outputDirectory, name));
-  if (!(await Promise.all(paths.map((path) => fileExists(path)))).every(Boolean)) return null;
+  if (!isCurrentAudioManifest(manifest)) return null;
+  const segments = manifest.files.map((file) => ({
+    ...file,
+    path: join(outputDirectory, file.name),
+  }));
+  if (!(await Promise.all(segments.map(({ path }) => fileExists(path)))).every(Boolean)) return null;
   return {
-    paths,
-    plan: manifest.plan === "single" ? "single" : "segmented",
-    segmentSeconds: Number(manifest.segmentSeconds ?? manifest.seconds ?? 0) || 0,
+    segments,
+    plan: manifest.plan,
+    segmentSeconds: Number(manifest.segmentSeconds) || 0,
     audioBytes: Number(manifest.audioBytes) || null,
+    sourceDurationSeconds: Number(manifest.sourceDurationSeconds) || null,
   };
+}
+
+async function mediaDurationSeconds(path) {
+  const { stdout } = await run("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    path,
+  ]);
+  const durationSeconds = Number(stdout.trim());
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new Error("Could not determine the duration of this media source.");
+  }
+  return durationSeconds;
 }
 
 async function makeAudioInputs(sourcePath, outputDirectory) {
@@ -386,34 +412,64 @@ async function makeAudioInputs(sourcePath, outputDirectory) {
   if (existingInputs) return existingInputs;
 
   const existing = await readdir(outputDirectory);
-  await Promise.all(existing.filter((name) => /^audio(?:-\d+)?\.(?:ogg|partial\.ogg)$/.test(name)).map((name) => rm(join(outputDirectory, name), { force: true })));
+  await Promise.all([
+    rm(manifestPath, { force: true }),
+    ...existing
+      // Also remove v2's `audio.ogg` and any older segment naming so a
+      // restarted job cannot leave a large obsolete intermediate behind.
+      .filter((name) => /^audio(?:-\d+)?\.(?:ogg|partial\.ogg)$/.test(name))
+      .map((name) => rm(join(outputDirectory, name), { force: true })),
+  ]);
 
-  const temporarySingle = join(outputDirectory, "audio.partial.ogg");
-  const singleAudio = join(outputDirectory, "audio.ogg");
+  const sourceDurationSeconds = await mediaDurationSeconds(sourcePath);
+  const segmentSeconds = transcriptionSegmentSeconds();
+  const requestedPlan = audioPlanForDuration(sourceDurationSeconds, segmentSeconds);
+  const output = join(outputDirectory, "audio-%03d.ogg");
+
+  // Encode and segment in one pass. This deliberately never creates a full
+  // derived-audio file before deciding to split: duration, not compressed file
+  // size, is the provider safety boundary for long podcast recordings.
   await run("ffmpeg", [
     "-hide_banner", "-loglevel", "error", "-y", "-i", sourcePath,
-    "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", "24k",
-    temporarySingle,
+    "-vn", "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", "24k",
+    "-f", "segment", "-segment_time", String(segmentSeconds), "-reset_timestamps", "1", output,
   ]);
-  await rename(temporarySingle, singleAudio);
 
-  const audioBytes = (await stat(singleAudio)).size;
-  const plan = audioPlanForSize(audioBytes, singleAudioLimitBytes());
-  if (plan === "single") {
-    await writeJsonAtomic(manifestPath, { version: 2, plan, files: ["audio.ogg"], segmentSeconds: 0, audioBytes });
-    return { paths: [singleAudio], plan, segmentSeconds: 0, audioBytes };
+  const names = (await readdir(outputDirectory))
+    .filter((name) => /^audio-\d{3}\.ogg$/.test(name))
+    .sort();
+  if (!names.length) throw new Error("Could not prepare transcription audio segments.");
+
+  let startSeconds = 0;
+  const files = [];
+  for (const name of names) {
+    const path = join(outputDirectory, name);
+    const [durationSeconds, details] = await Promise.all([
+      mediaDurationSeconds(path),
+      stat(path),
+    ]);
+    if (audioPlanForSize(details.size, singleAudioLimitBytes()) !== "single") {
+      throw new Error("A prepared transcription segment exceeded the configured OpenAI input size limit.");
+    }
+    files.push({ name, startSeconds, durationSeconds, bytes: details.size });
+    startSeconds += durationSeconds;
   }
 
-  const segmentSeconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 300), 1_800));
-  const output = join(outputDirectory, "audio-%03d.ogg");
-  await run("ffmpeg", [
-    "-hide_banner", "-loglevel", "error", "-y", "-i", singleAudio,
-    "-c:a", "copy", "-f", "segment", "-segment_time", String(segmentSeconds), "-reset_timestamps", "1", output,
-  ]);
-  const files = (await readdir(outputDirectory)).filter((name) => /^audio-\d+\.ogg$/.test(name)).sort();
-  if (!files.length) throw new Error("Could not prepare transcription audio segments.");
-  await writeJsonAtomic(manifestPath, { version: 2, plan, files, segmentSeconds, audioBytes });
-  return { paths: files.map((name) => join(outputDirectory, name)), plan, segmentSeconds, audioBytes };
+  if (requestedPlan === "segmented" && files.length < 2) {
+    throw new Error("Could not split this long recording into safe transcription segments.");
+  }
+  const plan = files.length === 1 ? "single" : "segmented";
+  const audioBytes = files.reduce((total, file) => total + file.bytes, 0);
+  const manifest = {
+    version: AUDIO_INPUT_MANIFEST_VERSION,
+    plan,
+    files,
+    segmentSeconds,
+    sourceDurationSeconds,
+    audioBytes,
+  };
+  await writeJsonAtomic(manifestPath, manifest);
+  return inputPathsFromManifest(manifest, outputDirectory);
 }
 
 async function transcribeRequest(filePath, model, responseFormat, extra = [], context = {}) {
@@ -467,7 +523,7 @@ async function transcribeRequest(filePath, model, responseFormat, extra = [], co
   });
 }
 
-function normalizeChunks(chunks, segmentSeconds) {
+function normalizeChunks(chunks) {
   const speakersByLabel = new Map();
   const speakerTurns = [];
   const words = [];
@@ -476,8 +532,8 @@ function normalizeChunks(chunks, segmentSeconds) {
     if (!speakersByLabel.has(normalized)) speakersByLabel.set(normalized, speakersByLabel.size);
     return speakersByLabel.get(normalized);
   };
-  chunks.forEach(({ diarized, timed }, chunkIndex) => {
-    const offset = chunkIndex * segmentSeconds;
+  chunks.forEach(({ diarized, timed, startSeconds = 0 }, chunkIndex) => {
+    const offset = startSeconds;
     const turns = Array.isArray(diarized?.segments) ? diarized.segments.map((segment) => ({
       start: Number(segment.start || 0) + offset,
       end: Number(segment.end || segment.start || 0) + offset,
@@ -521,14 +577,15 @@ async function processJob(job) {
     job.progress = 0.15;
     await persistJob(job);
     const audioInputs = await makeAudioInputs(sourcePath, workDirectory);
-    if (!audioInputs.paths.length) throw new Error("No audio track was found in this media source.");
+    if (!audioInputs.segments.length) throw new Error("No audio track was found in this media source.");
     metrics.compressedAudioBytes = audioInputs.audioBytes;
     metrics.audioPlan = audioInputs.plan;
-    metrics.audioInputCount = audioInputs.paths.length;
+    metrics.audioInputCount = audioInputs.segments.length;
+    metrics.sourceDurationSeconds = audioInputs.sourceDurationSeconds;
+    metrics.segmentSeconds = audioInputs.segmentSeconds;
     await persistJob(job);
 
-    const segments = audioInputs.paths;
-    const segmentSeconds = audioInputs.segmentSeconds;
+    const segments = audioInputs.segments;
     const chunks = [];
     const totalRequests = segments.length * 2;
     let completeRequests = 0;
@@ -556,7 +613,7 @@ async function processJob(job) {
       if (!diarized) {
         tasks.push((async () => {
           const startedAt = Date.now();
-          const payload = await transcribeRequest(segments[index], "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]], {
+          const payload = await transcribeRequest(segments[index].path, "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]], {
             jobId: job.id,
             chunkNumber,
             onRetry: async ({ nextAttempt, delayMs }) => {
@@ -572,7 +629,7 @@ async function processJob(job) {
             model: "gpt-4o-transcribe-diarize",
             chunkNumber,
             durationMs: Date.now() - startedAt,
-            inputBytes: (await stat(segments[index])).size,
+            inputBytes: segments[index].bytes,
             usage: payload?.usage ?? null,
             completedAt: Date.now(),
           });
@@ -583,7 +640,7 @@ async function processJob(job) {
       if (!timed) {
         tasks.push((async () => {
           const startedAt = Date.now();
-          const payload = await transcribeRequest(segments[index], "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]], {
+          const payload = await transcribeRequest(segments[index].path, "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]], {
             jobId: job.id,
             chunkNumber,
             onRetry: async ({ nextAttempt, delayMs }) => {
@@ -599,7 +656,7 @@ async function processJob(job) {
             model: "whisper-1",
             chunkNumber,
             durationMs: Date.now() - startedAt,
-            inputBytes: (await stat(segments[index])).size,
+            inputBytes: segments[index].bytes,
             usage: payload?.usage ?? null,
             completedAt: Date.now(),
           });
@@ -611,14 +668,14 @@ async function processJob(job) {
       const failed = outcomes.find((outcome) => outcome.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
       if (!diarized || !timed) throw new Error(`OpenAI did not return a complete transcription for ${chunkLabel}.`);
-      chunks.push({ diarized, timed });
+      chunks.push({ diarized, timed, startSeconds: segments[index].startSeconds });
       job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
       await persistJob(job);
     }
     job.stage = "finalizing";
     job.progress = 0.97;
     await persistJob(job);
-    const result = normalizeChunks(chunks, segmentSeconds);
+    const result = normalizeChunks(chunks);
     if (!result.words.length) throw new Error("OpenAI did not return timed words for this source.");
     job.status = "complete";
     job.stage = "complete";

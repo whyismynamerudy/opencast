@@ -85,9 +85,10 @@ Deploy it from the worker directory with `fly deploy`. Configure these secrets a
 OPENAI_API_KEY=
 CORS_ORIGIN=https://your-opencast-app.example.com
 OPENCAST_WORKER_SIGNING_SECRET=
-# Used only for compressed audio over the single-file safety threshold.
-OPENCAST_SEGMENT_SECONDS=300
-# Default is 20 MiB; keep this below the transcription endpoint's file cap.
+# Each derived audio input is bounded by duration before it reaches OpenAI.
+# Default: 900 seconds (15 min). Values are clamped to 60–1,200 seconds.
+OPENCAST_SEGMENT_SECONDS=900
+# Defensive per-chunk byte cap; default is 20 MiB.
 OPENCAST_SINGLE_AUDIO_MAX_BYTES=20971520
 # Resumable browser upload chunks (default: 16 MiB).
 OPENCAST_UPLOAD_CHUNK_BYTES=16777216
@@ -99,7 +100,7 @@ OPENCAST_TRANSCRIPTION_MAX_ATTEMPTS=4
 OPENCAST_JOB_RETENTION_MS=86400000
 ```
 
-The worker accepts only signed, scoped upload, playback, and job tickets issued by the authenticated Next.js app. Set the same high-entropy `OPENCAST_WORKER_SIGNING_SECRET` on both hosts. Job state, resumable upload offsets, originals, and chunk checkpoints live on the mounted Fly volume, so interrupted uploads and jobs recover after a Machine restart. A database/queue and replicated object storage are still the appropriate next steps for multi-user production.
+The worker accepts only signed, scoped upload, playback, and job tickets issued by the authenticated Next.js app. Set the same high-entropy `OPENCAST_WORKER_SIGNING_SECRET` on both hosts. For transcription, it extracts 16 kHz mono Opus directly from the original into duration-bounded chunks; it never makes a full intermediate audio file for a long episode. Chunk offsets and completed OpenAI responses are durable checkpoints, so an interrupted job resumes from the missing chunk after a Machine restart. A database/queue and replicated object storage are still the appropriate next steps for multi-user production.
 
 Fly deployment uses one Machine and keeps it running: asynchronous jobs carry on after the browser receives its job ID, so automatic idling must remain disabled. The mounted volume is the source of truth for this single-user deployment. Fly volumes are single-region, single-Machine storage; use a separate backup strategy before treating it as production archive storage.
 
