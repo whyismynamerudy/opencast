@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { useEditorStore } from "../lib/store";
+import { setProjectRuntime } from "../lib/projectRuntime";
+import type { ProjectSummary } from "../lib/projects";
 import type { WebMCPTool } from "../lib/webmcp/tools";
 
 const calls: Array<{ tool: WebMCPTool; signal?: AbortSignal }> = [];
@@ -13,6 +15,16 @@ Object.defineProperty(globalThis, "document", {
 });
 
 async function run() {
+  const project: ProjectSummary = { id: "project-1", title: "Pilot episode", createdAt: 1, updatedAt: 2, sourceCount: 2, wordCount: 24, duration: 88 };
+  const projectCalls: string[] = [];
+  setProjectRuntime({
+    list: async () => [project],
+    getActive: () => ({ id: project.id, title: project.title }),
+    create: async (title) => { projectCalls.push(`create:${title}`); return { ...project, id: "project-2", title: title || "Untitled podcast" }; },
+    open: async (id) => { projectCalls.push(`open:${id}`); return project; },
+    rename: async (id, title) => { projectCalls.push(`rename:${id}:${title}`); return { ...project, title }; },
+    delete: async (id) => { projectCalls.push(`delete:${id}`); },
+  });
   const { registerWebMCP } = await import("../lib/webmcp/register");
   const registration = registerWebMCP();
   await Promise.resolve();
@@ -30,6 +42,23 @@ async function run() {
   const response = await tool.execute({});
   assert.match(response.content[0].text, /"removed":1/);
   assert.equal(useEditorStore.getState().words[0].deleted, true);
+
+  const listProjects = calls.find(({ tool }) => tool.name === "list_projects")!.tool;
+  const listProjectsResponse = await listProjects.execute({});
+  assert.match(listProjectsResponse.content[0].text, /"Pilot episode"/);
+
+  const createProject = calls.find(({ tool }) => tool.name === "create_project")!.tool;
+  const createProjectResponse = await createProject.execute({ title: "Guest episode" });
+  assert.match(createProjectResponse.content[0].text, /"Guest episode"/);
+
+  const openProject = calls.find(({ tool }) => tool.name === "open_project")!.tool;
+  await openProject.execute({ project_id: project.id });
+
+  const deleteProject = calls.find(({ tool }) => tool.name === "delete_project")!.tool;
+  const deniedDelete = await deleteProject.execute({ project_id: project.id, confirm: false });
+  assert.match(deniedDelete.content[0].text, /"ok":false/);
+  await deleteProject.execute({ project_id: project.id, confirm: true });
+  assert.deepEqual(projectCalls, ["create:Guest episode", "open:project-1", "delete:project-1"]);
 
   const sourceId = useEditorStore.getState().addMediaSource({
     name: "guest-angle.mp4",
@@ -93,6 +122,7 @@ async function run() {
 
   registration.dispose();
   assert.equal(calls[0].signal?.aborted, true);
+  setProjectRuntime(null);
   delete (globalThis as { document?: unknown }).document;
   console.log("WebMCP registration and shared action smoke test passed.");
 }

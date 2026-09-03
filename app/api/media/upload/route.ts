@@ -1,5 +1,6 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
+import { isAuthorizedRequest } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -7,6 +8,7 @@ const DEFAULT_MAX_SOURCE_GB = 5;
 const MEDIA_TYPES = ["video/*", "audio/*"];
 
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isAuthorizedRequest(request)) return NextResponse.json({ error: "Sign in to upload media." }, { status: 401 });
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return NextResponse.json(
       { error: "Direct media storage is not configured. Set BLOB_READ_WRITE_TOKEN on this deployment." },

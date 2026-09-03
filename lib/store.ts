@@ -29,6 +29,27 @@ import type {
   Word,
 } from "./types";
 
+export type SavedMediaSource = Omit<MediaSource, "file" | "localUrl">;
+
+/** JSON-safe editor state stored in the authenticated browser's project library. */
+export type ProjectSnapshot = {
+  version: 1;
+  projectTitle: string;
+  projectRevision: number;
+  mediaSources: SavedMediaSource[];
+  activeSourceId: string | null;
+  programSegments: ProgramSegment[];
+  mediaName: string;
+  mediaKind: MediaKind;
+  duration: number;
+  words: Word[];
+  manualCuts: ManualCut[];
+  sceneBoundaries: SceneBoundary[];
+  speakers: Speaker[];
+  activity: AgentActivity[];
+  transcription: TranscriptionState;
+};
+
 type EditorState = {
   projectTitle: string;
   projectRevision: number;
@@ -95,10 +116,45 @@ type EditorState = {
   getKeepRanges: () => TimeRange[];
   getClips: () => ClipSegment[];
   getProjectState: () => Record<string, unknown>;
+  getProjectSnapshot: () => ProjectSnapshot;
+  loadProjectSnapshot: (snapshot: ProjectSnapshot) => void;
+  resetProject: (title?: string) => void;
 };
 
 const MAX_HISTORY = 80;
 const SPEAKER_COLORS = ["#dd6953", "#6e9cdb", "#a477d4", "#d6a540", "#4da58a"];
+
+function initialTranscription(): TranscriptionState {
+  return {
+    stage: "idle",
+    progress: 0,
+    message: "Ready for cloud transcription.",
+    error: null,
+    waveform: [],
+    speakerTurns: [],
+  };
+}
+
+/** Create a clean, JSON-safe state for a new project. */
+export function blankProjectSnapshot(title = "Untitled podcast"): ProjectSnapshot {
+  return {
+    version: 1,
+    projectTitle: title.trim() || "Untitled podcast",
+    projectRevision: 0,
+    mediaSources: [],
+    activeSourceId: null,
+    programSegments: [],
+    mediaName: "",
+    mediaKind: "video",
+    duration: 0,
+    words: [],
+    manualCuts: [],
+    sceneBoundaries: [],
+    speakers: [],
+    activity: [],
+    transcription: initialTranscription(),
+  };
+}
 
 function cloneSnapshot(state: Pick<EditorState, "words" | "manualCuts" | "sceneBoundaries" | "speakers" | "programSegments">): EditorSnapshot {
   return {
@@ -116,6 +172,35 @@ function activeSourceFields(source: MediaSource | undefined) {
     mediaUrl: source?.localUrl ?? source?.storageUrl ?? null,
     mediaName: source?.name ?? "",
     mediaKind: source?.kind ?? "video" as MediaKind,
+  };
+}
+
+function savedSource(source: MediaSource): SavedMediaSource {
+  const { file, localUrl, ...persisted } = source;
+  void file;
+  void localUrl;
+  return { ...persisted };
+}
+
+function restoredSource(source: SavedMediaSource): MediaSource {
+  return { ...source, file: null, localUrl: null };
+}
+
+function cloneProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
+  return {
+    ...snapshot,
+    mediaSources: snapshot.mediaSources.map((source) => ({ ...source })),
+    programSegments: snapshot.programSegments.map((segment) => ({ ...segment })),
+    words: snapshot.words.map((word) => ({ ...word })),
+    manualCuts: snapshot.manualCuts.map((cut) => ({ ...cut })),
+    sceneBoundaries: snapshot.sceneBoundaries.map((boundary) => ({ ...boundary })),
+    speakers: snapshot.speakers.map((speaker) => ({ ...speaker })),
+    activity: snapshot.activity.map((item) => ({ ...item })),
+    transcription: {
+      ...snapshot.transcription,
+      waveform: [...snapshot.transcription.waveform],
+      speakerTurns: snapshot.transcription.speakerTurns.map((turn) => ({ ...turn })),
+    },
   };
 }
 
@@ -188,14 +273,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     exportRequest: null,
     exportStatus: "idle",
     exportError: null,
-    transcription: {
-      stage: "idle",
-      progress: 0,
-      message: "Ready for cloud transcription.",
-      error: null,
-      waveform: [],
-      speakerTurns: [],
-    },
+    transcription: initialTranscription(),
 
     setMedia: (file, url, duration) => {
       const state = get();
@@ -644,5 +722,64 @@ export const useEditorStore = create<EditorState>((set, get) => {
         },
       };
     },
+
+    getProjectSnapshot: () => {
+      const state = get();
+      return {
+        version: 1,
+        projectTitle: state.projectTitle,
+        projectRevision: state.projectRevision,
+        mediaSources: state.mediaSources.map(savedSource),
+        activeSourceId: state.activeSourceId,
+        programSegments: state.programSegments.map((segment) => ({ ...segment })),
+        mediaName: state.mediaName,
+        mediaKind: state.mediaKind,
+        duration: state.duration,
+        words: state.words.map((word) => ({ ...word })),
+        manualCuts: state.manualCuts.map((cut) => ({ ...cut })),
+        sceneBoundaries: state.sceneBoundaries.map((boundary) => ({ ...boundary })),
+        speakers: state.speakers.map((speaker) => ({ ...speaker })),
+        activity: state.activity.map((item) => ({ ...item })),
+        transcription: {
+          ...state.transcription,
+          waveform: [...state.transcription.waveform],
+          speakerTurns: state.transcription.speakerTurns.map((turn) => ({ ...turn })),
+        },
+      };
+    },
+
+    loadProjectSnapshot: (snapshot) => {
+      const next = cloneProjectSnapshot(snapshot);
+      const mediaSources = next.mediaSources.map(restoredSource);
+      const activeSource = mediaSources.find((source) => source.id === next.activeSourceId) ?? mediaSources[0];
+      set({
+        projectTitle: next.projectTitle || "Untitled podcast",
+        projectRevision: Number.isFinite(next.projectRevision) ? next.projectRevision : 0,
+        mediaSources,
+        activeSourceId: activeSource?.id ?? null,
+        programSegments: next.programSegments,
+        sourceUploadRequest: null,
+        ...activeSourceFields(activeSource),
+        mediaName: activeSource?.name ?? next.mediaName,
+        mediaKind: activeSource?.kind ?? next.mediaKind,
+        duration: next.duration,
+        words: next.words,
+        manualCuts: next.manualCuts,
+        sceneBoundaries: next.sceneBoundaries,
+        speakers: next.speakers,
+        selectedWordIds: [],
+        playbackTime: 0,
+        isPlaying: false,
+        history: [],
+        future: [],
+        activity: next.activity,
+        exportRequest: null,
+        exportStatus: "idle",
+        exportError: null,
+        transcription: next.transcription,
+      });
+    },
+
+    resetProject: (title) => get().loadProjectSnapshot(blankProjectSnapshot(title)),
   };
 });

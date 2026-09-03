@@ -4,6 +4,12 @@ OpenCast is a WebMCP-native, transcript-first podcast editor for projects with m
 
 It is designed for ChatGPT Desktop’s built-in browser: a person sees and controls the editing surface while an agent can use the precise tools that OpenCast exposes on that page.
 
+## Access and projects
+
+OpenCast now has a deliberately simple single-admin workspace. Sign in with **`admin` / `admin`**; the credential check and session-cookie issuance happen on the Next.js backend, and media-upload/job-ticket endpoints require that session too. This is suitable for a private demo only, not a real authentication system. Set `OPENCAST_AUTH_SECRET` in Vercel so the HttpOnly session signature is unique to your deployment.
+
+After sign-in, the project library lets you create, open, rename, and delete editing projects. Project snapshots are stored in the signed-in browser's IndexedDB, which is appropriate for this single-user deployment and comfortably holds large transcripts. A snapshot includes words, edits, speaker/source metadata, and the durable Blob URLs; it intentionally never stores a local `File` or full HD original in browser project storage. Original media remains in Blob storage.
+
 ## What is implemented
 
 - Multiple audio or video sources with role labels, individual sync offsets, durable storage status, and an active-angle preview.
@@ -44,6 +50,8 @@ npm run dev
 
 Open `http://localhost:3000`. **Try the sample transcript** exercises the editor without media, storage, or an API key. To process local media, configure Blob storage and the worker as described below; the OpenAI key stays on the worker, never in the browser or Next.js app.
 
+For the demo workspace, sign in with `admin` / `admin`.
+
 ## Deploying long HD episodes
 
 ### 1. Deploy the Next.js app
@@ -60,6 +68,9 @@ NEXT_PUBLIC_OPENCAST_MEDIA_WORKER_URL=https://your-opencast-worker.example.com
 
 # Shared only with the worker. The app uses it to issue short-lived job tickets.
 OPENCAST_WORKER_SIGNING_SECRET=
+
+# Sign the single-admin HttpOnly session cookie.
+OPENCAST_AUTH_SECRET=
 
 # Optional: WebMCP origin trial token for your deployed origin.
 WEBMCP_ORIGIN_TRIAL_TOKEN=
@@ -99,12 +110,14 @@ Open OpenCast in the ChatGPT Desktop built-in browser, enable Site tools, and as
 
 Useful agent sequence:
 
-1. `create_multicam_project`
+1. `list_projects`, then `create_project` or `open_project`.
 2. `request_source_upload` — intentionally prepares the visible file-picker workflow rather than pretending a WebMCP tool can read arbitrary files from the computer.
 3. `list_sources`, `set_source_role`, and `sync_source`
 4. `queue_source_ingest` / `get_source_ingest_status` for a stored long source, after user approval.
 5. `get_source_transcript` and `propose_program_cut`
 6. `apply_program_cut` with the returned `expected_revision`, then the normal transcript-edit tools.
+
+`rename_project` is available for project organization. `delete_project` requires `confirm: true` and removes only the browser-saved project record; it never deletes Blob originals.
 
 Every tool calls the same Zustand action hub as the UI. Agent activity is shown in the right-hand panel, and program edits use a revision check so an agent does not overwrite a newer live human edit.
 
@@ -119,6 +132,8 @@ npm run lint
 npm run test:core
 npm run test:pipeline
 npm run test:media-status
+npm run test:auth
+npm run test:projects
 npm run test:multicam
 npm run test:worker-ticket
 npm run test:webmcp

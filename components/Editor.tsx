@@ -2,12 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Download, PanelRightClose, PanelRightOpen, Redo2, Scissors, Undo2 } from "lucide-react";
+import { Download, FolderOpen, LogOut, PanelRightClose, PanelRightOpen, Redo2, Scissors, Undo2 } from "lucide-react";
 import { getClipSegments, getCutRanges, getKeepRanges } from "@/lib/edits";
 import { renderCutMedia } from "@/lib/ffmpeg";
 import { downloadBlob, wordsToSrt } from "@/lib/serializeTranscript";
 import { useEditorStore } from "@/lib/store";
-import { useWebMCP } from "@/hooks/useWebMCP";
 import { AgentActivityPanel } from "./AgentActivityPanel";
 import { ExportDialog } from "./ExportDialog";
 import { MediaPreview, formatTime } from "./MediaPreview";
@@ -16,7 +15,13 @@ import { TranscriptPanel } from "./TranscriptPanel";
 import { UploadScreen } from "./UploadScreen";
 import { SourceManager } from "./SourceManager";
 
-export function Editor() {
+type EditorProps = {
+  onOpenProjects?: () => void;
+  onSignOut?: () => void;
+  webMcpAvailable?: boolean;
+};
+
+export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: EditorProps) {
   const words = useEditorStore((state) => state.words);
   const manualCuts = useEditorStore((state) => state.manualCuts);
   const boundaries = useEditorStore((state) => state.sceneBoundaries);
@@ -32,7 +37,6 @@ export function Editor() {
   const undo = useEditorStore((state) => state.undo);
   const redo = useEditorStore((state) => state.redo);
   const deleteWords = useEditorStore((state) => state.deleteWords);
-  const webMcpAvailable = useWebMCP();
   const [inspectorOpen, setInspectorOpen] = useState(true);
 
   const cuts = useMemo(() => getCutRanges(words, manualCuts, duration), [words, manualCuts, duration]);
@@ -103,12 +107,14 @@ export function Editor() {
         <Link className="brand-lockup" href="/" aria-label="OpenCast home"><span className="brand-mark">◒</span><span>OpenCast</span></Link>
         <div className="project-name"><span className="project-dot" />{projectTitle || mediaName || "Untitled transcript"}<small>{sourceCount > 1 ? `${sourceCount} synchronized sources` : transcription.stage === "complete" ? "cloud transcript + speakers" : "cloud project"}</small></div>
         <div className="topbar-actions">
+          {onOpenProjects && <button type="button" className="toolbar-button project-library-button" title="All projects" onClick={onOpenProjects}><FolderOpen size={16} /> Projects</button>}
           <button type="button" className="toolbar-button" title="Undo" aria-label="Undo" onClick={() => undo()} disabled={!history.length}><Undo2 size={16} /></button>
           <button type="button" className="toolbar-button" title="Redo" aria-label="Redo" onClick={() => redo()} disabled={!future.length}><Redo2 size={16} /></button>
           <button type="button" className="toolbar-button inspector-toggle" title={inspectorOpen ? "Hide project details" : "Show project details"} aria-label={inspectorOpen ? "Hide project details" : "Show project details"} onClick={() => setInspectorOpen((open) => !open)}>
             {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
           </button>
           <button type="button" className="export-main" onClick={() => useEditorStore.getState().requestExport("mp4")}><Download size={16} /> Export</button>
+          {onSignOut && <button type="button" className="toolbar-button sign-out-editor" title="Sign out" aria-label="Sign out" onClick={onSignOut}><LogOut size={16} /></button>}
         </div>
       </header>
 

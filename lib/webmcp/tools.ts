@@ -1,6 +1,7 @@
 import type { useEditorStore } from "@/lib/store";
 import { queueMediaWorkerSource } from "@/lib/mediaWorkerClient";
 import { SOURCE_ROLES, sourceForTime } from "@/lib/multicam";
+import { getProjectRuntime } from "@/lib/projectRuntime";
 import type { Speaker, SpeakerTurn, Word } from "@/lib/types";
 
 type Store = typeof useEditorStore;
@@ -52,6 +53,56 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
     };
 
   return [
+    {
+      name: "list_projects",
+      description: "List saved OpenCast projects in this authenticated browser, newest first. Each project preserves transcript edits, source roles, and Blob references.",
+      inputSchema: objectSchema(),
+      execute: run("list_projects", async () => ({ projects: await getProjectRuntime().list(), message: "Listed saved projects." })),
+    },
+    {
+      name: "get_active_project",
+      description: "Read which saved project is currently open in OpenCast.",
+      inputSchema: objectSchema(),
+      execute: run("get_active_project", () => ({ ...getProjectRuntime().getActive(), message: "Read active project." })),
+    },
+    {
+      name: "create_project",
+      description: "Create and open a new blank OpenCast project. This saves the current project first and does not delete it.",
+      inputSchema: objectSchema({ title: { type: "string", minLength: 1, maxLength: 120 } }),
+      execute: run("create_project", async (args) => {
+        const title = typeof args.title === "string" ? args.title : undefined;
+        const project = await getProjectRuntime().create(title);
+        return { project, message: `Created and opened ${project.title}.` };
+      }),
+    },
+    {
+      name: "open_project",
+      description: "Save the current project, then open a saved project by ID. This changes the visible editor project.",
+      inputSchema: objectSchema({ project_id: { type: "string", minLength: 1 } }, ["project_id"]),
+      execute: run("open_project", async (args) => {
+        const project = await getProjectRuntime().open(String(args.project_id ?? ""));
+        return { project, message: `Opened ${project.title}.` };
+      }),
+    },
+    {
+      name: "rename_project",
+      description: "Rename a saved project. Use get_active_project to find the current project ID.",
+      inputSchema: objectSchema({ project_id: { type: "string", minLength: 1 }, title: { type: "string", minLength: 1, maxLength: 120 } }, ["project_id", "title"]),
+      execute: run("rename_project", async (args) => {
+        const project = await getProjectRuntime().rename(String(args.project_id ?? ""), String(args.title ?? ""));
+        return { project, message: `Renamed project to ${project.title}.` };
+      }),
+    },
+    {
+      name: "delete_project",
+      description: "Permanently remove a saved project record from this browser. It does not delete the original media from Blob storage. This is destructive and requires explicit confirmation.",
+      inputSchema: objectSchema({ project_id: { type: "string", minLength: 1 }, confirm: { type: "boolean", const: true } }, ["project_id", "confirm"]),
+      execute: run("delete_project", async (args) => {
+        if (args.confirm !== true) throw new Error("Set confirm to true only after the person approves deleting this project.");
+        await getProjectRuntime().delete(String(args.project_id ?? ""));
+        return { projectId: String(args.project_id ?? ""), message: "Deleted saved project record. Original Blob media was retained." };
+      }),
+    },
     {
       name: "get_project_state",
       description: "Read OpenCast's current sources, master timeline, cuts, program angle selections, and speakers before editing.",

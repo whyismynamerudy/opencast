@@ -1,11 +1,13 @@
 import { isProjectMediaUrl, issueWorkerJobTicket } from "@/lib/workerTicket";
 import { NextResponse } from "next/server";
+import { isAuthorizedRequest } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 const SOURCE_ID = /^[a-zA-Z0-9-]{16,}$/;
 
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isAuthorizedRequest(request)) return NextResponse.json({ error: "Sign in to process media." }, { status: 401 });
   try {
     const body = await request.json() as { sourceUrl?: unknown; sourceId?: unknown; filename?: unknown };
     if (!isProjectMediaUrl(body.sourceUrl) || typeof body.sourceId !== "string" || !SOURCE_ID.test(body.sourceId)) {
