@@ -80,7 +80,7 @@ type EditorState = {
   createMulticamProject: (title?: string) => void;
   requestSourceUpload: (roles?: SourceRole[]) => SourceUploadRequest;
   clearSourceUploadRequest: () => void;
-  addMediaSource: (input: Pick<MediaSource, "name" | "role" | "kind" | "duration" | "file" | "localUrl">) => string;
+  addMediaSource: (input: Pick<MediaSource, "name" | "role" | "kind" | "duration" | "file" | "localUrl"> & { fileSize?: number }) => string;
   updateMediaSource: (sourceId: string, update: Partial<Omit<MediaSource, "id">>) => boolean;
   setActiveSource: (sourceId: string) => boolean;
   setSourceRole: (sourceId: string, role: SourceRole) => boolean;
@@ -169,7 +169,9 @@ function cloneSnapshot(state: Pick<EditorState, "words" | "manualCuts" | "sceneB
 function activeSourceFields(source: MediaSource | undefined) {
   return {
     mediaFile: source?.file ?? null,
-    mediaUrl: source?.localUrl ?? source?.storageUrl ?? null,
+    // The local object URL gives an immediate preview. Persisted Fly sources
+    // receive a fresh, short-lived playback URL in MediaPreview after reload.
+    mediaUrl: source?.localUrl ?? null,
     mediaName: source?.name ?? "",
     mediaKind: source?.kind ?? "video" as MediaKind,
   };
@@ -183,7 +185,7 @@ function savedSource(source: MediaSource): SavedMediaSource {
 }
 
 function restoredSource(source: SavedMediaSource): MediaSource {
-  return { ...source, file: null, localUrl: null };
+  return { ...source, fileSize: source.fileSize ?? 0, file: null, localUrl: null };
 }
 
 function cloneProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
@@ -290,9 +292,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         uploadProgress: 0,
         processingProgress: 0,
         processingStage: null,
+        fileSize: file.size,
         file,
         localUrl: url,
-        storageUrl: null,
         storagePath: null,
         ingestJobId: null,
         error: null,
@@ -347,9 +349,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         uploadProgress: 0,
         processingProgress: 0,
         processingStage: null,
+        fileSize: input.fileSize ?? input.file?.size ?? 0,
         file: input.file,
         localUrl: input.localUrl,
-        storageUrl: null,
         storagePath: null,
         ingestJobId: null,
         error: null,
@@ -711,7 +713,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
           syncOffset: source.syncOffset,
           status: source.status,
           uploadProgress: source.uploadProgress,
-          hasCloudCopy: Boolean(source.storageUrl),
+          hasCloudCopy: Boolean(source.storagePath),
           ingestJobId: source.ingestJobId,
         })),
         programSegments: state.programSegments.map((segment) => ({ ...segment })),

@@ -14,8 +14,8 @@ snapshot.mediaSources = [{
   uploadProgress: 1,
   processingProgress: 1,
   processingStage: "complete",
-  storageUrl: "https://store.public.blob.vercel-storage.com/episode.mp4",
-  storagePath: "opencast/saved-source/episode.mp4",
+  fileSize: 123,
+  storagePath: sourceId,
   ingestJobId: "complete-job",
   error: null,
 }];
@@ -29,11 +29,11 @@ const restored = useEditorStore.getState();
 assert.equal(restored.projectTitle, "Episode archive");
 assert.equal(restored.mediaSources[0].file, null);
 assert.equal(restored.mediaSources[0].localUrl, null);
-assert.equal(restored.mediaUrl, "https://store.public.blob.vercel-storage.com/episode.mp4");
+assert.equal(restored.mediaUrl, null);
 assert.equal(restored.words[0].text, "Welcome");
 
 const savedAgain = restored.getProjectSnapshot();
-assert.equal(savedAgain.mediaSources[0].storageUrl, "https://store.public.blob.vercel-storage.com/episode.mp4");
+assert.equal(savedAgain.mediaSources[0].storagePath, sourceId);
 assert.equal("file" in savedAgain.mediaSources[0], false);
 assert.equal("localUrl" in savedAgain.mediaSources[0], false);
 

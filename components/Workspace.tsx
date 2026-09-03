@@ -191,7 +191,7 @@ function ProjectLibrary({ projects, loading, error, onCreate, onOpen, onRename, 
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm("Delete this saved project? Its media originals will remain in Blob storage.")) return;
+    if (!window.confirm("Delete this saved project? Its media originals will remain in Fly storage.")) return;
     setBusyId(id);
     setActionError(null);
     try { await onDelete(id); } catch (reason) { setActionError(reason instanceof Error ? reason.message : "Could not delete this project."); } finally { setBusyId(null); }

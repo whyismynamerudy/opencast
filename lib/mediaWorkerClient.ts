@@ -56,12 +56,12 @@ function failWorkerSource(sourceId: string, reason: unknown): QueueResult {
   return { ok: false, error: message };
 }
 
-async function issueWorkerTicket(source: { storageUrl: string | null; id: string; name: string }) {
-  if (!source.storageUrl) throw new Error("Wait for direct media storage to finish before transcription starts.");
+async function issueWorkerTicket(source: { storagePath: string | null; id: string; name: string }) {
+  if (!source.storagePath) throw new Error("Wait for the Fly media upload to finish before transcription starts.");
   const ticketResponse = await fetch("/api/media/worker-ticket", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sourceUrl: source.storageUrl, sourceId: source.id, filename: source.name }),
+    body: JSON.stringify({ sourceId: source.id, filename: source.name }),
   });
   const ticketPayload = await ticketResponse.json() as { ticket?: string; error?: string };
   if (!ticketResponse.ok || !ticketPayload.ticket) throw new Error(ticketPayload.error || "Could not authorize the media worker job.");
@@ -103,7 +103,7 @@ export async function queueMediaWorkerSource(sourceId: string): Promise<QueueRes
   const editor = useEditorStore.getState();
   const source = editor.mediaSources.find((item) => item.id === sourceId);
   if (!baseUrl) return failWorkerSource(sourceId, new Error("This OpenCast deployment has no media worker URL configured."));
-  if (!source?.storageUrl) return failWorkerSource(sourceId, new Error("Wait for direct media storage to finish before transcription starts."));
+  if (!source?.storagePath) return failWorkerSource(sourceId, new Error("Wait for the Fly media upload to finish before transcription starts."));
   if (source.ingestJobId && source.status === "transcribing") {
     pollWorkerJob(baseUrl, sourceId, source.ingestJobId);
     return { ok: true, jobId: source.ingestJobId };

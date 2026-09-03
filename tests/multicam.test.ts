@@ -32,8 +32,8 @@ function run() {
   ]);
 
   const sources = [
-    { id: "host", name: "host.mp4", role: "host", kind: "video", duration: 61, syncOffset: 0, status: "ready", uploadProgress: 1, file: null, localUrl: null, storageUrl: null, storagePath: null, ingestJobId: null, error: null },
-    { id: "guest", name: "guest.mp4", role: "guest", kind: "video", duration: 60, syncOffset: 2, status: "ready", uploadProgress: 1, file: null, localUrl: null, storageUrl: null, storagePath: null, ingestJobId: null, error: null },
+    { id: "host", name: "host.mp4", role: "host", kind: "video", duration: 61, syncOffset: 0, status: "ready", uploadProgress: 1, fileSize: 0, file: null, localUrl: null, storagePath: null, ingestJobId: null, error: null },
+    { id: "guest", name: "guest.mp4", role: "guest", kind: "video", duration: 60, syncOffset: 2, status: "ready", uploadProgress: 1, fileSize: 0, file: null, localUrl: null, storagePath: null, ingestJobId: null, error: null },
   ] satisfies MediaSource[];
   assert.equal(projectDuration(sources, [word]), 62, "project duration includes a source's sync offset");
 

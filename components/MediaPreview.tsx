@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { rangeAt } from "@/lib/edits";
 import { masterToSourceTime, sourceToMasterTime } from "@/lib/multicam";
@@ -18,6 +18,26 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const setPlaybackTime = useEditorStore((state) => state.setPlaybackTime);
   const setIsPlaying = useEditorStore((state) => state.setIsPlaying);
   const mediaRef = useRef<HTMLMediaElement>(null);
+  const [storedMedia, setStoredMedia] = useState<{ sourceId: string; url: string } | null>(null);
+
+  useEffect(() => {
+    if (activeSource?.localUrl || !activeSource?.storagePath) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/media/playback-ticket", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sourceId: activeSource.id }),
+          signal: controller.signal,
+        });
+        const payload = await response.json() as { url?: string };
+        if (!response.ok || !payload.url) throw new Error("Could not load the stored media preview.");
+        if (!controller.signal.aborted) setStoredMedia({ sourceId: activeSource.id, url: payload.url });
+      } catch { /* The empty preview is clearer than an expired stored URL. */ }
+    })();
+    return () => controller.abort();
+  }, [activeSource?.id, activeSource?.localUrl, activeSource?.storagePath]);
 
   useEffect(() => {
     const media = mediaRef.current;
@@ -48,7 +68,9 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
     return () => cancelAnimationFrame(frame);
   }, [activeSource?.syncOffset, cuts, isPlaying, setPlaybackTime]);
 
-  if (!mediaUrl) {
+  const previewUrl = mediaUrl ?? (storedMedia && storedMedia.sourceId === activeSource?.id ? storedMedia.url : null);
+
+  if (!previewUrl) {
     return (
       <section className="preview empty-preview">
         <div className="empty-preview-content">
@@ -62,7 +84,7 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
 
   const shared = {
     ref: mediaRef as React.RefObject<HTMLVideoElement> & React.RefObject<HTMLAudioElement>,
-    src: mediaUrl,
+    src: previewUrl,
     onTimeUpdate: () => setPlaybackTime(sourceToMasterTime(mediaRef.current?.currentTime ?? 0, activeSource?.syncOffset)),
     onEnded: () => setIsPlaying(false),
   };

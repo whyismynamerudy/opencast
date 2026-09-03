@@ -8,15 +8,15 @@ It is designed for ChatGPT Desktop’s built-in browser: a person sees and contr
 
 OpenCast now has a deliberately simple single-admin workspace. Sign in with **`admin` / `admin`**; the credential check and session-cookie issuance happen on the Next.js backend, and media-upload/job-ticket endpoints require that session too. This is suitable for a private demo only, not a real authentication system. Set `OPENCAST_AUTH_SECRET` in Vercel so the HttpOnly session signature is unique to your deployment.
 
-After sign-in, the project library lets you create, open, rename, and delete editing projects. Project snapshots are stored in the signed-in browser's IndexedDB, which is appropriate for this single-user deployment and comfortably holds large transcripts. A snapshot includes words, edits, speaker/source metadata, and the durable Blob URLs; it intentionally never stores a local `File` or full HD original in browser project storage. Original media remains in Blob storage.
+After sign-in, the project library lets you create, open, rename, and delete editing projects. Project snapshots are stored in the signed-in browser's IndexedDB, which is appropriate for this single-user deployment and comfortably holds large transcripts. A snapshot includes words, edits, speaker/source metadata, and Fly media source keys; it intentionally never stores a local `File` or full HD original in browser project storage. Originals remain on the mounted Fly volume.
 
 ## What is implemented
 
 - Multiple audio or video sources with role labels, individual sync offsets, durable storage status, and an active-angle preview.
 - A shared master timeline. Source transcripts retain native source times while the editor, agent tools, cuts, and program-angle selections use synchronized master times.
 - Transcript edits: select/cut/restore words, remove fillers and silence, split, trim, undo/redo, speaker labels, SRT export, and local single-source MP4/MP3 export.
-- A direct browser-to-Vercel-Blob upload path. Files larger than 100 MB use multipart upload, so a 60-minute HD source does not pass through a Next.js request or need to be loaded into server memory.
-- An included Docker media worker for long sources. It streams the original to Fly disk, creates one low-bitrate audio file, then runs diarization and word timing concurrently. Oversized compressed audio falls back to bounded segments. Transient API/download failures retry automatically, while durable checkpoints make a manual retry resume instead of starting over.
+- A direct browser-to-Fly resumable upload path. The browser sends 16 MiB chunks straight to the worker volume, so a 60-minute HD source never passes through a Next.js request or needs to be loaded into server memory.
+- An included Docker media worker for long sources. It reads the original from Fly disk, creates one low-bitrate audio file, then runs diarization and word timing concurrently. Oversized compressed audio falls back to bounded segments. Transient API/upload failures retry automatically, while durable checkpoints make a manual retry resume instead of starting over.
 - A WebMCP editing surface with source upload requests, source listing/role/sync control, worker-job queueing and status, source transcript reads, program-cut proposal/application, and all original text-editing controls.
 
 The source-aware program timeline is complete and shared between the person and agent. Multicam MP4/MP3 rendering is deliberately routed to a worker instead of browser ffmpeg.wasm; the current UI blocks accidental local multicam renders and continues to support SRT export. This keeps the hackathon app responsive with hour-long HD originals while leaving server rendering as the next production worker task.
@@ -26,11 +26,9 @@ The source-aware program timeline is complete and shared between the person and 
 ```text
 local files chosen in OpenCast
         │
-        ├── direct multipart upload ──> Vercel Blob (original source)
-        │                                  │
-        │                                  └──> Docker/Fly.io media worker
-        │                                       ffmpeg: 16 kHz / 24 kbps audio
-        │                                       OpenAI: diarization + word timing (parallel)
+        ├── resumable 16 MiB chunks ──> Docker/Fly.io media worker + volume
+        │                                  ffmpeg: 16 kHz / 24 kbps audio
+        │                                  OpenAI: diarization + word timing (parallel)
         │                                              │
         └── local object URL for immediate preview     ▼
                                       source transcript + source/master timestamps
@@ -38,7 +36,7 @@ local files chosen in OpenCast
                                      OpenCast master timeline + WebMCP tools
 ```
 
-The worker avoids an in-memory copy of the original. It streams the original to the mounted Fly volume and converts it to 16 kHz mono Ogg/Opus at 24 kbps. If that audio is at or below the 20 MiB safety limit, it makes just two concurrent transcription requests—one for speakers and one for word timing. That covers roughly two hours of podcast audio. Larger compressed inputs fall back to five-minute chunks, still with only two requests in flight at once. Completed jobs retain only their compact result; failed/in-progress jobs retain their original, audio, and completed checkpoints for up to 24 hours so they can recover after a restart or resume on retry. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
+The worker avoids an in-memory copy of the original. It writes the browser’s resumable chunks directly to the mounted Fly volume and converts the completed source to 16 kHz mono Ogg/Opus at 24 kbps. If that audio is at or below the 20 MiB safety limit, it makes just two concurrent transcription requests—one for speakers and one for word timing. That covers roughly two hours of podcast audio. Larger compressed inputs fall back to five-minute chunks, still with only two requests in flight at once. Originals remain available for later preview; completed jobs retain only their compact result, while failed/in-progress jobs retain their audio and checkpoints for up to 24 hours. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
 
 ## Quick start: transcript/editor only
 
@@ -48,7 +46,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`, create a project, and choose one or more audio/video recordings. To process local media, configure Blob storage and the worker as described below; the OpenAI key stays on the worker, never in the browser or Next.js app. The product intentionally starts with media rather than manual transcript-file import.
+Open `http://localhost:3000`, create a project, and choose one or more audio/video recordings. To process local media, configure the Fly worker as described below; the OpenAI key stays on the worker, never in the browser or Next.js app. The product intentionally starts with media rather than manual transcript-file import.
 
 For the demo workspace, sign in with `admin` / `admin`.
 
@@ -59,14 +57,13 @@ For the demo workspace, sign in with `admin` / `admin`.
 Deploy this repository to Vercel (or another Next.js-compatible host) and set these environment variables:
 
 ```bash
-# Direct project-media storage (server-only Vercel Blob credential)
-BLOB_READ_WRITE_TOKEN=
+# Maximum source size authorized by the app (default: 5 GB).
 OPENCAST_MAX_SOURCE_GB=5
 
 # Browser-visible URL of the worker deployed in step 2
 NEXT_PUBLIC_OPENCAST_MEDIA_WORKER_URL=https://your-opencast-worker.example.com
 
-# Shared only with the worker. The app uses it to issue short-lived job tickets.
+# Shared only with the worker. The app uses it to issue scoped upload, playback, and job tickets.
 OPENCAST_WORKER_SIGNING_SECRET=
 
 # Sign the single-admin HttpOnly session cookie.
@@ -76,11 +73,11 @@ OPENCAST_AUTH_SECRET=
 WEBMCP_ORIGIN_TRIAL_TOKEN=
 ```
 
-`OPENCAST_MAX_SOURCE_GB` defaults to 5 GB. The direct Blob token is constrained by the upload route to audio/video paths beneath the generated source ID and Vercel Blob’s client upload supports multipart retries.
+`OPENCAST_MAX_SOURCE_GB` defaults to 5 GB. Each ticket is restricted to one generated source ID, filename, content type, size, and expiry. The browser resumes from the worker-reported offset after transient errors.
 
 ### 2. Deploy the media worker
 
-The [`worker`](worker) directory is a standalone Docker service. OpenCast ships a Fly configuration in [`worker/fly.toml`](worker/fly.toml) sized for one HD source at a time: two shared CPUs, 2 GB RAM, and a 15 GB encrypted volume at `/data`. The worker writes source downloads, chunks, and job checkpoints below `OPENCAST_WORK_DIR`; it removes large artifacts after a successful job and retains only failed/in-progress checkpoints for recovery.
+The [`worker`](worker) directory is a standalone Docker service. OpenCast ships a Fly configuration in [`worker/fly.toml`](worker/fly.toml) sized for one HD source at a time: two shared CPUs, 2 GB RAM, and a 15 GB encrypted volume at `/data`. The worker writes originals, compact audio, and job checkpoints below `OPENCAST_WORK_DIR`; it removes derived artifacts after a successful job and retains originals for durable preview.
 
 Deploy it from the worker directory with `fly deploy`. Configure these secrets and environment values:
 
@@ -92,23 +89,25 @@ OPENCAST_WORKER_SIGNING_SECRET=
 OPENCAST_SEGMENT_SECONDS=300
 # Default is 20 MiB; keep this below the transcription endpoint's file cap.
 OPENCAST_SINGLE_AUDIO_MAX_BYTES=20971520
-# Transient OpenAI/download failures retry automatically four times by default.
+# Resumable browser upload chunks (default: 16 MiB).
+OPENCAST_UPLOAD_CHUNK_BYTES=16777216
+# Keep this space free before accepting another source (default: 1 GiB).
+OPENCAST_MIN_FREE_STORAGE_BYTES=1073741824
+# Transient OpenAI failures retry automatically four times by default.
 OPENCAST_TRANSCRIPTION_MAX_ATTEMPTS=4
 # Failed/in-progress job checkpoints are pruned after one day by default.
 OPENCAST_JOB_RETENTION_MS=86400000
 ```
 
-The worker accepts Vercel public Blob URLs by default, but it starts jobs only with a short-lived ticket signed by the protected Vercel app. Set the same high-entropy `OPENCAST_WORKER_SIGNING_SECRET` on both hosts. Optionally set `ALLOWED_MEDIA_ORIGINS` to the exact Blob store origin after the first upload. Job state and chunk checkpoints live on the mounted Fly volume, so interrupted jobs recover after a Machine restart and the UI's Retry action resumes an existing failed job after obtaining a fresh ticket. A database/queue is still the appropriate next step for multi-user production.
+The worker accepts only signed, scoped upload, playback, and job tickets issued by the authenticated Next.js app. Set the same high-entropy `OPENCAST_WORKER_SIGNING_SECRET` on both hosts. Job state, resumable upload offsets, originals, and chunk checkpoints live on the mounted Fly volume, so interrupted uploads and jobs recover after a Machine restart. A database/queue and replicated object storage are still the appropriate next steps for multi-user production.
 
-Fly deployment uses one Machine and keeps it running: asynchronous jobs carry on after the browser receives its job ID, so automatic idling must remain disabled. The mounted volume is temporary working space rather than durable project storage; Blob retains the original source.
-
-This hackathon reference uploads originals with **public, unguessable Blob URLs** so the separate worker can retrieve them without receiving a broad storage credential. Add application authentication and switch to a private storage + signed-worker retrieval model for a real production deployment.
+Fly deployment uses one Machine and keeps it running: asynchronous jobs carry on after the browser receives its job ID, so automatic idling must remain disabled. The mounted volume is the source of truth for this single-user deployment. Fly volumes are single-region, single-Machine storage; use a separate backup strategy before treating it as production archive storage.
 
 ### 3. Use it
 
 1. Choose every local source together. The first two default to host and guest; change roles in the Sources panel as needed.
 2. Set the manual sync offset if the recordings did not begin together. Positive means that source begins later on the master timeline.
-3. Every source begins direct upload immediately; OpenCast opens the editor with the local preview and timeline straight away. Storage and transcription continue in the background, with the editable transcript appearing in place when it is ready.
+3. Every source begins direct upload immediately; OpenCast opens the editor with the local preview and timeline straight away. Storage and transcription continue in the background, with the editable transcript appearing in place when it is ready. If a connection drops, choose **Resume upload**; after a browser refresh, choose the same filename and size again to continue from Fly’s stored offset.
 4. Select an angle and use **Cut to …** at the playhead to choose the program camera for the current program segment.
 
 ## WebMCP workflow
@@ -124,7 +123,7 @@ Useful agent sequence:
 5. `get_source_transcript` and `propose_program_cut`
 6. `apply_program_cut` with the returned `expected_revision`, then the normal transcript-edit tools.
 
-`rename_project` is available for project organization. `delete_project` requires `confirm: true` and removes only the browser-saved project record; it never deletes Blob originals.
+`rename_project` is available for project organization. `delete_project` requires `confirm: true` and removes only the browser-saved project record; it never deletes Fly originals.
 
 Every tool calls the same Zustand action hub as the UI. Agent activity is shown in the right-hand panel, and program edits use a revision check so an agent does not overwrite a newer live human edit.
 
@@ -154,8 +153,8 @@ The tests cover the original edit engine and media helpers, master/source timest
 
 ## Development notes
 
-- All media sources use the Fly media worker after direct Blob upload, including short clips. This keeps OpenAI credentials off Vercel and gives one consistent, durable retry path for podcast-length recordings.
-- The browser keeps local object URLs only for the active session/preview. The original durable copy lives in Blob storage, and neither the Next.js app nor the browser needs to hold a full HD video in memory.
+- All media sources use the Fly media worker directly, including short clips. This keeps OpenAI credentials off Vercel and gives one consistent, durable retry path for podcast-length recordings.
+- The browser keeps local object URLs only for the active session/preview. The original durable copy lives on Fly, and neither the Next.js app nor the browser needs to hold a full HD video in memory.
 - Speaker identities from independently processed chunks are provisional. Production-quality cross-chunk speaker identity resolution and server-side multicam rendering are sensible next worker upgrades.
 
 OpenCast is released under the [MIT License](LICENSE).

@@ -55,7 +55,7 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
   return [
     {
       name: "list_projects",
-      description: "List saved OpenCast projects in this authenticated browser, newest first. Each project preserves transcript edits, source roles, and Blob references.",
+      description: "List saved OpenCast projects in this authenticated browser, newest first. Each project preserves transcript edits, source roles, and Fly media references.",
       inputSchema: objectSchema(),
       execute: run("list_projects", async () => ({ projects: await getProjectRuntime().list(), message: "Listed saved projects." })),
     },
@@ -95,12 +95,12 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
     },
     {
       name: "delete_project",
-      description: "Permanently remove a saved project record from this browser. It does not delete the original media from Blob storage. This is destructive and requires explicit confirmation.",
+      description: "Permanently remove a saved project record from this browser. It does not delete the original media from Fly storage. This is destructive and requires explicit confirmation.",
       inputSchema: objectSchema({ project_id: { type: "string", minLength: 1 }, confirm: { type: "boolean", const: true } }, ["project_id", "confirm"]),
       execute: run("delete_project", async (args) => {
         if (args.confirm !== true) throw new Error("Set confirm to true only after the person approves deleting this project.");
         await getProjectRuntime().delete(String(args.project_id ?? ""));
-        return { projectId: String(args.project_id ?? ""), message: "Deleted saved project record. Original Blob media was retained." };
+        return { projectId: String(args.project_id ?? ""), message: "Deleted saved project record. Original Fly media was retained." };
       }),
     },
     {
@@ -166,11 +166,11 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
     },
     {
       name: "queue_source_ingest",
-      description: "Queue a directly stored large source in the configured OpenCast media worker. It downloads the project source, derives small audio segments, and sends those segments to OpenAI for timed transcription. Use only after confirming this external processing is wanted.",
+      description: "Queue a completed Fly-stored source in the configured OpenCast media worker. It derives compact audio locally and sends that audio to OpenAI for timed transcription. Use only after confirming this external processing is wanted.",
       inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 } }, ["source_id"]),
       execute: run("queue_source_ingest", async (args) => {
         const source = state().mediaSources.find((item) => item.id === String(args.source_id ?? ""));
-        if (!source?.storageUrl) throw new Error("That source must finish direct storage before it can be queued.");
+        if (!source?.storagePath) throw new Error("That source must finish its Fly upload before it can be queued.");
         const queued = await queueMediaWorkerSource(source.id);
         if (!queued.ok) throw new Error(queued.error);
         return { sourceId: source.id, jobId: queued.jobId, message: "Queued source ingest. OpenCast will apply the transcript automatically when it completes." };

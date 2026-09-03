@@ -78,7 +78,7 @@ async function run() {
   assert.match(sourceResponse.content[0].text, /"words":\[\]/);
 
   useEditorStore.getState().updateMediaSource(sourceId, {
-    storageUrl: "https://store.public.blob.vercel-storage.com/guest-angle.mp4",
+    storagePath: sourceId,
     status: "needs-worker",
   });
   const previousFetch = globalThis.fetch;
@@ -104,7 +104,7 @@ async function run() {
     assert.deepEqual(workerRequests.map(({ url, body }) => ({ url, body })), [
       {
         url: "/api/media/worker-ticket",
-        body: JSON.stringify({ sourceUrl: "https://store.public.blob.vercel-storage.com/guest-angle.mp4", sourceId, filename: "guest-angle.mp4" }),
+        body: JSON.stringify({ sourceId, filename: "guest-angle.mp4" }),
       },
       { url: "https://worker.example.test/jobs", body: JSON.stringify({ ticket: "signed-worker-ticket" }) },
     ]);

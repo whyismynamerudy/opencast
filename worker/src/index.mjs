@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { mkdir, readdir, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, extname } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
+import { Transform } from "node:stream";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -15,22 +15,34 @@ const run = promisify(execFile);
 const port = Number(process.env.PORT || 8080);
 const workRoot = process.env.OPENCAST_WORK_DIR || tmpdir();
 const jobRoot = join(workRoot, "opencast-jobs");
+const mediaRoot = join(workRoot, "opencast-media");
 const jobs = new Map();
 const pendingJobs = [];
+const activeUploads = new Set();
 let processingQueue = false;
 const OPENAI_TRANSCRIPT_URL = "https://api.openai.com/v1/audio/transcriptions";
 const maxTranscriptionAttempts = Math.max(1, Math.min(Number(process.env.OPENCAST_TRANSCRIPTION_MAX_ATTEMPTS || 4), 8));
 const jobRetentionMs = Math.max(60 * 60 * 1000, Number(process.env.OPENCAST_JOB_RETENTION_MS || 24 * 60 * 60 * 1000));
+const maxUploadChunkBytes = Math.max(1 * 1024 * 1024, Math.min(Number(process.env.OPENCAST_UPLOAD_CHUNK_BYTES || 16 * 1024 * 1024), 64 * 1024 * 1024));
+const minFreeStorageBytes = Math.max(128 * 1024 * 1024, Number(process.env.OPENCAST_MIN_FREE_STORAGE_BYTES || 1 * 1024 * 1024 * 1024));
+const sourceIdPattern = /^[a-zA-Z0-9-]{16,}$/;
 
 function respond(response, status, body) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(body));
 }
 
-function setCors(response) {
-  response.setHeader("access-control-allow-origin", process.env.CORS_ORIGIN || "*");
-  response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
-  response.setHeader("access-control-allow-headers", "content-type");
+function setCors(request, response) {
+  const configured = (process.env.CORS_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+  const origin = request.headers.origin;
+  if (!configured.length) response.setHeader("access-control-allow-origin", "*");
+  else if (origin && configured.includes(origin)) {
+    response.setHeader("access-control-allow-origin", origin);
+    response.setHeader("vary", "Origin");
+  }
+  response.setHeader("access-control-allow-methods", "GET,HEAD,POST,PATCH,OPTIONS");
+  response.setHeader("access-control-allow-headers", "authorization,content-type,upload-offset");
+  response.setHeader("access-control-expose-headers", "upload-offset,upload-length,accept-ranges,content-range");
 }
 
 async function readJson(request) {
@@ -44,22 +56,10 @@ async function readJson(request) {
   return JSON.parse(Buffer.concat(parts).toString("utf8"));
 }
 
-function allowedSourceUrl(value) {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:") return false;
-    const configured = (process.env.ALLOWED_MEDIA_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean);
-    if (configured.length) return configured.includes(url.origin);
-    return url.hostname.endsWith(".public.blob.vercel-storage.com");
-  } catch {
-    return false;
-  }
-}
-
-function readJobTicket(value) {
+function readSignedTicket(value, expectedKind) {
   const secret = process.env.OPENCAST_WORKER_SIGNING_SECRET;
   if (!secret) throw new Error("Media worker authorization is not configured.");
-  if (typeof value !== "string") throw new Error("A media worker job ticket is required.");
+  if (typeof value !== "string") throw new Error("A media worker ticket is required.");
   const [encoded, suppliedSignature, ...rest] = value.split(".");
   if (!encoded || !suppliedSignature || rest.length) throw new Error("Media worker job ticket is invalid.");
   const expectedSignature = createHmac("sha256", secret).update(encoded).digest("base64url");
@@ -72,13 +72,39 @@ function readJobTicket(value) {
   } catch {
     throw new Error("Media worker job ticket is invalid.");
   }
-  if (!allowedSourceUrl(claim?.sourceUrl) || typeof claim?.filename !== "string" || typeof claim?.sourceId !== "string") {
+  if (claim?.kind !== expectedKind || typeof claim?.sourceId !== "string" || !sourceIdPattern.test(claim.sourceId)) {
     throw new Error("Media worker job ticket is invalid.");
   }
-  if (!Number.isFinite(claim.expiresAt) || claim.expiresAt <= Date.now() || claim.expiresAt > Date.now() + 15 * 60 * 1000) {
+  const maxLifetime = expectedKind === "upload" ? 25 * 60 * 60 * 1000 : expectedKind === "media" ? 3 * 60 * 60 * 1000 : 15 * 60 * 1000;
+  if (!Number.isFinite(claim.expiresAt) || claim.expiresAt <= Date.now() || claim.expiresAt > Date.now() + maxLifetime) {
     throw new Error("Media worker job ticket has expired.");
   }
+  if (expectedKind === "upload") {
+    if (typeof claim.filename !== "string" || !claim.filename || claim.filename.length > 255 || !Number.isSafeInteger(claim.size) || claim.size <= 0 || typeof claim.contentType !== "string" || !/^(audio|video)\//.test(claim.contentType)) {
+      throw new Error("Media upload ticket is invalid.");
+    }
+  }
+  if (expectedKind === "job" && (typeof claim.filename !== "string" || !claim.filename || claim.filename.length > 255)) {
+    throw new Error("Media worker job ticket is invalid.");
+  }
   return claim;
+}
+
+function ticketFromRequest(request) {
+  const authorization = request.headers.authorization;
+  return authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
+}
+
+function readJobTicket(value) {
+  return readSignedTicket(value, "job");
+}
+
+function readUploadTicket(request) {
+  return readSignedTicket(ticketFromRequest(request), "upload");
+}
+
+function readMediaTicket(value) {
+  return readSignedTicket(value, "media");
 }
 
 function jobView(job) {
@@ -138,7 +164,6 @@ function jobDirectory(job) {
 function jobMetadata(job) {
   return {
     id: job.id,
-    sourceUrl: job.sourceUrl,
     sourceId: job.sourceId,
     filename: job.filename,
     status: job.status,
@@ -172,34 +197,174 @@ async function persistJob(job) {
   await writeJsonAtomic(join(directory, "job.json"), jobMetadata(job));
 }
 
-async function downloadSource(url, path, jobId) {
-  const partialPath = `${path}.part`;
-  const maxDownloadAttempts = 4;
-  await withTransientRetries({
-    maxAttempts: maxDownloadAttempts,
-    attempt: async () => {
-      await rm(partialPath, { force: true });
-      let response;
-      try {
-        response = await fetch(url);
-      } catch (error) {
-        throw requestError(`Source download did not receive a response: ${describeError(error)}`, { retryable: true });
-      }
-      if (!response.ok || !response.body) {
-        throw requestError(`Could not download source media (${response.status}).`, {
-          retryable: isRetryableStatus(response.status),
-          retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
-        });
-      }
-      try {
-        await pipeline(Readable.fromWeb(response.body), createWriteStream(partialPath));
-      } catch (error) {
-        throw requestError(`Source download interrupted: ${describeError(error)}`, { retryable: true });
-      }
-    },
-    onRetry: ({ attempt, nextAttempt, delayMs, error }) => console.warn(`[job ${jobId}] Retrying source download after attempt ${attempt}/${maxDownloadAttempts}: ${describeError(error)}. Next attempt ${nextAttempt} in ${delayMs}ms.`),
+function mediaDirectory(sourceId) {
+  return join(mediaRoot, sourceId);
+}
+
+function uploadManifestPath(sourceId) {
+  return join(mediaDirectory(sourceId), "upload.json");
+}
+
+function mediaManifestPath(sourceId) {
+  return join(mediaDirectory(sourceId), "media.json");
+}
+
+function partialMediaPath(sourceId) {
+  return join(mediaDirectory(sourceId), "source.part");
+}
+
+function safeExtension(filename) {
+  const extension = extname(filename).toLowerCase();
+  return /^\.[a-z0-9]{1,10}$/.test(extension) ? extension : ".media";
+}
+
+function finalMediaName(filename) {
+  return `source${safeExtension(filename)}`;
+}
+
+async function existingUploadOffset(sourceId) {
+  try {
+    return (await stat(partialMediaPath(sourceId))).size;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
+async function availableStorageBytes() {
+  const filesystem = await statfs(workRoot);
+  return Number(filesystem.bavail) * Number(filesystem.bsize);
+}
+
+async function ensureStorageCapacity(additionalBytes) {
+  const available = await availableStorageBytes();
+  if (available - additionalBytes < minFreeStorageBytes) {
+    throw new Error("Fly media storage is full. Free space before uploading another recording.");
+  }
+}
+
+async function prepareUpload(claim) {
+  const directory = mediaDirectory(claim.sourceId);
+  await mkdir(directory, { recursive: true });
+  const complete = await readJsonFile(mediaManifestPath(claim.sourceId));
+  if (complete?.sourceId === claim.sourceId && complete?.filename === claim.filename && complete?.size === claim.size) {
+    return { offset: claim.size, complete: true };
+  }
+  const manifest = await readJsonFile(uploadManifestPath(claim.sourceId));
+  if (manifest && (manifest.sourceId !== claim.sourceId || manifest.filename !== claim.filename || manifest.size !== claim.size || manifest.contentType !== claim.contentType)) {
+    throw new Error("This upload source is already reserved for a different recording.");
+  }
+  const offset = await existingUploadOffset(claim.sourceId);
+  if (offset > claim.size) throw new Error("Stored upload data is larger than its authorized source.");
+  await ensureStorageCapacity(Math.max(0, claim.size - offset));
+  await writeJsonAtomic(uploadManifestPath(claim.sourceId), {
+    sourceId: claim.sourceId,
+    filename: claim.filename,
+    size: claim.size,
+    contentType: claim.contentType,
+    offset,
+    updatedAt: Date.now(),
   });
-  await rename(partialPath, path);
+  return { offset, complete: false };
+}
+
+async function finalizeUpload(claim) {
+  const directory = mediaDirectory(claim.sourceId);
+  const partialPath = partialMediaPath(claim.sourceId);
+  const finalName = finalMediaName(claim.filename);
+  const finalPath = join(directory, finalName);
+  if (await fileExists(finalPath)) return;
+  await rename(partialPath, finalPath);
+  await writeJsonAtomic(mediaManifestPath(claim.sourceId), {
+    sourceId: claim.sourceId,
+    filename: claim.filename,
+    size: claim.size,
+    contentType: claim.contentType,
+    file: finalName,
+    completedAt: Date.now(),
+  });
+  await rm(uploadManifestPath(claim.sourceId), { force: true });
+}
+
+async function storedMedia(claim) {
+  const manifest = await readJsonFile(mediaManifestPath(claim.sourceId));
+  if (!manifest || manifest.sourceId !== claim.sourceId || typeof manifest.file !== "string" || !/^source\.[a-z0-9]{1,10}$/.test(manifest.file)) {
+    throw new Error("The completed Fly media source was not found.");
+  }
+  const path = join(mediaDirectory(claim.sourceId), manifest.file);
+  if (!await fileExists(path)) throw new Error("The completed Fly media source was not found.");
+  return { path, manifest };
+}
+
+async function writeUploadChunk(request, claim, expectedOffset) {
+  if (activeUploads.has(claim.sourceId)) return { conflict: true, offset: await existingUploadOffset(claim.sourceId) };
+  activeUploads.add(claim.sourceId);
+  try {
+    const currentOffset = await existingUploadOffset(claim.sourceId);
+    if (currentOffset !== expectedOffset) return { conflict: true, offset: currentOffset };
+    const rawContentLength = request.headers["content-length"];
+    const contentLength = rawContentLength === undefined ? null : Number(rawContentLength);
+    const remaining = claim.size - currentOffset;
+    if (contentLength !== null && (!Number.isSafeInteger(contentLength) || contentLength <= 0 || contentLength > maxUploadChunkBytes || contentLength > remaining)) {
+      throw new Error(`Upload chunks must be between 1 byte and ${maxUploadChunkBytes} bytes.`);
+    }
+    await ensureStorageCapacity(contentLength ?? Math.min(maxUploadChunkBytes, remaining));
+    let bytes = 0;
+    const limiter = new Transform({
+      transform(chunk, encoding, callback) {
+        bytes += chunk.length;
+        if (bytes > maxUploadChunkBytes || bytes > remaining) return callback(new Error("Upload chunk exceeds the authorized media size."));
+        callback(null, chunk);
+      },
+    });
+    await pipeline(request, limiter, createWriteStream(partialMediaPath(claim.sourceId), { flags: "a" }));
+    if (!bytes || (contentLength !== null && bytes !== contentLength)) throw new Error("Upload chunk did not match its declared size.");
+    const offset = await existingUploadOffset(claim.sourceId);
+    if (offset === claim.size) await finalizeUpload(claim);
+    else {
+      await writeJsonAtomic(uploadManifestPath(claim.sourceId), {
+        sourceId: claim.sourceId,
+        filename: claim.filename,
+        size: claim.size,
+        contentType: claim.contentType,
+        offset,
+        updatedAt: Date.now(),
+      });
+    }
+    return { conflict: false, offset };
+  } finally {
+    activeUploads.delete(claim.sourceId);
+  }
+}
+
+function streamMedia(request, response, media) {
+  const total = Number(media.manifest.size);
+  const range = request.headers.range;
+  const baseHeaders = {
+    "content-type": media.manifest.contentType || "application/octet-stream",
+    "accept-ranges": "bytes",
+    "cache-control": "private, no-store",
+  };
+  if (!range) {
+    response.writeHead(200, { ...baseHeaders, "content-length": total });
+    createReadStream(media.path).pipe(response);
+    return;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) {
+    response.writeHead(416, { ...baseHeaders, "content-range": `bytes */${total}` });
+    response.end();
+    return;
+  }
+  const start = match[1] ? Number(match[1]) : 0;
+  const end = match[2] ? Number(match[2]) : total - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= total || end >= total) {
+    response.writeHead(416, { ...baseHeaders, "content-range": `bytes */${total}` });
+    response.end();
+    return;
+  }
+  response.writeHead(206, { ...baseHeaders, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${total}` });
+  createReadStream(media.path, { start, end }).pipe(response);
 }
 
 async function inputPathsFromManifest(manifest, outputDirectory) {
@@ -347,15 +512,10 @@ async function processJob(job) {
     job.error = null;
     const metrics = ensureJobMetrics(job);
     await mkdir(workDirectory, { recursive: true });
-    const extension = extname(job.filename || new URL(job.sourceUrl).pathname) || ".media";
-    const sourcePath = join(workDirectory, `source${extension.replace(/[^.a-zA-Z0-9]/g, "")}`);
-    if (!await fileExists(sourcePath)) {
-      job.stage = "downloading";
-      job.progress = 0.03;
-      await persistJob(job);
-      console.info(`[job ${job.id}] Downloading ${job.filename}`);
-      await downloadSource(job.sourceUrl, sourcePath, job.id);
-    }
+    job.stage = "preparing";
+    job.progress = 0.08;
+    await persistJob(job);
+    const { path: sourcePath } = await storedMedia(job);
     metrics.sourceBytes = (await stat(sourcePath)).size;
     job.stage = "extracting";
     job.progress = 0.15;
@@ -520,7 +680,7 @@ async function restoreJobs() {
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[a-zA-Z0-9-]+$/.test(entry.name)) continue;
     const job = await readJsonFile(join(jobRoot, entry.name, "job.json"));
-    if (!job || job.id !== entry.name || typeof job.sourceUrl !== "string" || typeof job.sourceId !== "string" || typeof job.filename !== "string") continue;
+    if (!job || job.id !== entry.name || typeof job.sourceId !== "string" || !sourceIdPattern.test(job.sourceId) || typeof job.filename !== "string") continue;
     if (Number.isFinite(job.updatedAt) && Date.now() - job.updatedAt > jobRetentionMs) {
       await rm(join(jobRoot, entry.name), { recursive: true, force: true });
       continue;
@@ -538,15 +698,81 @@ async function restoreJobs() {
 }
 
 const server = createServer(async (request, response) => {
-  setCors(response);
+  setCors(request, response);
   if (request.method === "OPTIONS") return response.writeHead(204).end();
-  if (request.method === "GET" && request.url === "/health") return respond(response, 200, { ok: true });
-  if (request.method === "POST" && request.url === "/jobs") {
+  const url = new URL(request.url || "/", "http://opencast-worker.local");
+  const pathname = url.pathname;
+  if (request.method === "GET" && pathname === "/health") return respond(response, 200, { ok: true });
+
+  if (request.method === "POST" && pathname === "/uploads") {
+    try {
+      const claim = readUploadTicket(request);
+      const upload = await prepareUpload(claim);
+      return respond(response, 200, { offset: upload.offset, complete: upload.complete });
+    } catch (error) {
+      return respond(response, 400, { error: error instanceof Error ? error.message : "Could not prepare the Fly media upload." });
+    }
+  }
+
+  if (request.method === "HEAD" && pathname === "/uploads") {
+    try {
+      const claim = readUploadTicket(request);
+      const upload = await prepareUpload(claim);
+      response.writeHead(204, { "upload-offset": upload.offset, "upload-length": claim.size, "cache-control": "no-store" });
+      return response.end();
+    } catch (error) {
+      return respond(response, 400, { error: error instanceof Error ? error.message : "Could not inspect the Fly media upload." });
+    }
+  }
+
+  if (request.method === "PATCH" && pathname === "/uploads") {
+    try {
+      const claim = readUploadTicket(request);
+      const headerOffset = Number(request.headers["upload-offset"]);
+      if (!Number.isSafeInteger(headerOffset) || headerOffset < 0) throw new Error("A valid upload offset is required.");
+      const upload = await prepareUpload(claim);
+      if (upload.complete) {
+        response.writeHead(204, { "upload-offset": claim.size, "upload-length": claim.size, "cache-control": "no-store" });
+        return response.end();
+      }
+      if (upload.offset !== headerOffset) return respond(response, 409, { error: "Upload offset has changed. Resume from the returned offset.", offset: upload.offset });
+      const written = await writeUploadChunk(request, claim, headerOffset);
+      if (written.conflict) return respond(response, 409, { error: "Another upload chunk is active. Resume from the returned offset.", offset: written.offset });
+      response.writeHead(204, { "upload-offset": written.offset, "upload-length": claim.size, "cache-control": "no-store" });
+      return response.end();
+    } catch (error) {
+      return respond(response, 400, { error: error instanceof Error ? error.message : "Could not store the Fly media upload." });
+    }
+  }
+
+  const mediaMatch = (request.method === "GET" || request.method === "HEAD") ? pathname.match(/^\/media\/([a-zA-Z0-9-]+)$/) : null;
+  if (mediaMatch) {
+    try {
+      const claim = readMediaTicket(url.searchParams.get("ticket"));
+      if (claim.sourceId !== mediaMatch[1]) return respond(response, 403, { error: "This media ticket cannot access the requested source." });
+      const media = await storedMedia(claim);
+      if (request.method === "HEAD") {
+        response.writeHead(200, {
+          "content-type": media.manifest.contentType || "application/octet-stream",
+          "content-length": media.manifest.size,
+          "accept-ranges": "bytes",
+          "cache-control": "private, no-store",
+        });
+        return response.end();
+      }
+      return streamMedia(request, response, media);
+    } catch (error) {
+      return respond(response, 404, { error: error instanceof Error ? error.message : "Stored media was not found." });
+    }
+  }
+
+  if (request.method === "POST" && pathname === "/jobs") {
     try {
       const body = await readJson(request);
       const claim = readJobTicket(body.ticket);
       const now = Date.now();
-      const job = { id: crypto.randomUUID(), sourceUrl: claim.sourceUrl, sourceId: claim.sourceId, filename: claim.filename, status: "queued", stage: "queued", progress: 0, error: null, result: null, createdAt: now, updatedAt: now };
+      await storedMedia(claim);
+      const job = { id: crypto.randomUUID(), sourceId: claim.sourceId, filename: claim.filename, status: "queued", stage: "queued", progress: 0, error: null, result: null, createdAt: now, updatedAt: now };
       await persistJob(job);
       jobs.set(job.id, job);
       enqueueJob(job);
@@ -555,7 +781,7 @@ const server = createServer(async (request, response) => {
       return respond(response, 400, { error: error instanceof Error ? error.message : "Invalid job request." });
     }
   }
-  const retryMatch = request.method === "POST" ? request.url?.match(/^\/jobs\/([a-zA-Z0-9-]+)\/retry$/) : null;
+  const retryMatch = request.method === "POST" ? pathname.match(/^\/jobs\/([a-zA-Z0-9-]+)\/retry$/) : null;
   if (retryMatch) {
     try {
       const body = await readJson(request);
@@ -563,7 +789,7 @@ const server = createServer(async (request, response) => {
       const job = jobs.get(retryMatch[1]);
       if (!job) return respond(response, 404, { error: "Job not found or expired." });
       if (job.status !== "error") return respond(response, 409, { error: "Only failed jobs can be resumed." });
-      if (job.sourceUrl !== claim.sourceUrl || job.sourceId !== claim.sourceId || job.filename !== claim.filename) {
+      if (job.sourceId !== claim.sourceId || job.filename !== claim.filename) {
         return respond(response, 403, { error: "This ticket cannot resume the requested job." });
       }
       job.status = "queued";
@@ -576,7 +802,7 @@ const server = createServer(async (request, response) => {
       return respond(response, 400, { error: error instanceof Error ? error.message : "Could not resume the media worker job." });
     }
   }
-  const match = request.method === "GET" ? request.url?.match(/^\/jobs\/([a-zA-Z0-9-]+)$/) : null;
+  const match = request.method === "GET" ? pathname.match(/^\/jobs\/([a-zA-Z0-9-]+)$/) : null;
   if (match) {
     const job = jobs.get(match[1]);
     return job ? respond(response, 200, jobView(job)) : respond(response, 404, { error: "Job not found or expired." });

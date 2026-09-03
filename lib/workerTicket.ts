@@ -1,12 +1,29 @@
 import { createHmac } from "node:crypto";
 
-const TICKET_TTL_MS = 10 * 60 * 1000;
+const JOB_TICKET_TTL_MS = 10 * 60 * 1000;
+const UPLOAD_TICKET_TTL_MS = 24 * 60 * 60 * 1000;
+const MEDIA_TICKET_TTL_MS = 2 * 60 * 60 * 1000;
 
 export type WorkerJobClaim = {
+  kind: "job";
   expiresAt: number;
   filename: string;
   sourceId: string;
-  sourceUrl: string;
+};
+
+export type WorkerUploadClaim = {
+  kind: "upload";
+  contentType: string;
+  expiresAt: number;
+  filename: string;
+  size: number;
+  sourceId: string;
+};
+
+export type WorkerMediaClaim = {
+  kind: "media";
+  expiresAt: number;
+  sourceId: string;
 };
 
 function signingSecret(): string {
@@ -15,19 +32,20 @@ function signingSecret(): string {
   return secret;
 }
 
-export function isProjectMediaUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname.endsWith(".public.blob.vercel-storage.com");
-  } catch {
-    return false;
-  }
-}
-
-export function issueWorkerJobTicket(input: Omit<WorkerJobClaim, "expiresAt">): string {
-  const claim: WorkerJobClaim = { ...input, expiresAt: Date.now() + TICKET_TTL_MS };
+function signClaim(claim: WorkerJobClaim | WorkerUploadClaim | WorkerMediaClaim): string {
   const encoded = Buffer.from(JSON.stringify(claim)).toString("base64url");
   const signature = createHmac("sha256", signingSecret()).update(encoded).digest("base64url");
   return `${encoded}.${signature}`;
+}
+
+export function issueWorkerJobTicket(input: Omit<WorkerJobClaim, "expiresAt" | "kind">): string {
+  return signClaim({ ...input, kind: "job", expiresAt: Date.now() + JOB_TICKET_TTL_MS });
+}
+
+export function issueWorkerUploadTicket(input: Omit<WorkerUploadClaim, "expiresAt" | "kind">): string {
+  return signClaim({ ...input, kind: "upload", expiresAt: Date.now() + UPLOAD_TICKET_TTL_MS });
+}
+
+export function issueWorkerMediaTicket(sourceId: string): string {
+  return signClaim({ kind: "media", sourceId, expiresAt: Date.now() + MEDIA_TICKET_TTL_MS });
 }

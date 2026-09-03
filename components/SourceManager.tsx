@@ -23,7 +23,7 @@ export function SourceManager() {
   const setSourceSyncOffset = useEditorStore((state) => state.setSourceSyncOffset);
   const applyProgramCut = useEditorStore((state) => state.applyProgramCut);
   const addActivity = useEditorStore((state) => state.addActivity);
-  const { importFiles, importing } = useMediaSources();
+  const { importFiles, importing, resumeSource } = useMediaSources();
   const { processLargeSource } = useMediaWorker();
 
   const active = sources.find((source) => source.id === activeSourceId);
@@ -54,7 +54,8 @@ export function SourceManager() {
               <label>Sync (s)<input aria-label={`${source.name} sync offset`} type="number" step="0.01" value={source.syncOffset} onChange={(event) => setSourceSyncOffset(source.id, Number(event.target.value))} /></label>
             </div>
             <footer><span><CloudUpload size={12} /> {sourceStatusLabel(source)}</span>
-              {source.status === "error" && source.storageUrl && <button type="button" onClick={() => void processLargeSource(source.id)}>Retry</button>}
+              {source.status === "local" && source.file && <button type="button" onClick={() => void resumeSource(source.id)}>Resume upload</button>}
+              {source.status === "error" && source.storagePath && <button type="button" onClick={() => void processLargeSource(source.id)}>Retry</button>}
             </footer>
             {(source.status === "uploading" || source.status === "uploaded" || source.status === "transcribing") && <div className="source-card-progress" aria-hidden="true"><span style={{ width: `${Math.round(sourceProgress(source) * 100)}%` }} /></div>}
           </article>

@@ -18,7 +18,7 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
   const sourceUploadRequest = useEditorStore((state) => state.sourceUploadRequest);
   const clearSourceUploadRequest = useEditorStore((state) => state.clearSourceUploadRequest);
   const transcription = useEditorStore((state) => state.transcription);
-  const { importFiles, importing } = useMediaSources();
+  const { importFiles, importing, resumeSource } = useMediaSources();
   const { processLargeSource } = useMediaWorker();
   const [error, setError] = useState<string | null>(null);
 
@@ -81,14 +81,15 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
                     <small>{source.role} · {Math.round(source.duration)}s · {sourceStatusLabel(source)}</small>
                     <i className="source-row-progress" aria-hidden="true"><b style={{ width: `${Math.round(sourceProgress(source) * 100)}%` }} /></i>
                   </span>
-                  {source.status === "error" && source.storageUrl && <button type="button" onClick={() => void processLargeSource(source.id)}>Retry</button>}
+                  {source.status === "local" && source.file && <button type="button" onClick={() => void resumeSource(source.id)}>Resume upload</button>}
+                  {source.status === "error" && source.storagePath && <button type="button" onClick={() => void processLargeSource(source.id)}>Retry</button>}
                 </div>
               ))}
             </div>
           </section>
         )}
 
-        <p className="media-upload-note">Direct-to-storage uploads · automatic transcription</p>
+        <p className="media-upload-note">Resumable uploads · automatic transcription</p>
         {transcription.stage === "error" && (
           <div className={`transcription-progress ${transcription.stage === "error" ? "error" : ""}`}>
             <div className="transcription-progress-icon"><CloudUpload size={18} /></div>

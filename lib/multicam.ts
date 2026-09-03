@@ -29,9 +29,11 @@ export type MediaSource = {
   /** Worker-side progress after the original has reached project storage. */
   processingProgress?: number;
   processingStage?: string | null;
+  /** Used to safely recognize an interrupted source when the user selects it again. */
+  fileSize: number;
   file: File | null;
   localUrl: string | null;
-  storageUrl: string | null;
+  /** Stable source key for the original stored on the Fly media volume. */
   storagePath: string | null;
   ingestJobId: string | null;
   error: string | null;
