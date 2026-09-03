@@ -293,8 +293,8 @@ function normalizeChunks(chunks, segmentSeconds) {
       });
     });
   });
-  const speakers = [...speakersByLabel.entries()].map(([label, id]) => ({ id, name: label.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()), color: ["#dd6953", "#6e9cdb", "#a477d4", "#d6a540", "#4da58a"][id % 5] }));
-  return { words: words.filter((word) => word.text), speakers: speakers.length ? speakers : [{ id: 0, name: "Speaker 1", color: "#6e9cdb" }], speakerTurns };
+  const speakers = [...speakersByLabel.entries()].map(([label, id]) => ({ id, name: label.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()), color: ["#a8402f", "#31547d", "#5d6b2f", "#96650f", "#2f6b62"][id % 5] }));
+  return { words: words.filter((word) => word.text), speakers: speakers.length ? speakers : [{ id: 0, name: "Speaker 1", color: "#31547d" }], speakerTurns };
 }
 
 async function processJob(job) {

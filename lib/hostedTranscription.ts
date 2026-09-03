@@ -21,7 +21,7 @@ export type HostedTranscription = {
   speakerTurns: SpeakerTurn[];
 };
 
-const COLORS = ["#dd6953", "#6e9cdb", "#a477d4", "#d6a540", "#4da58a", "#da76ac"];
+const COLORS = ["#a8402f", "#31547d", "#5d6b2f", "#96650f", "#2f6b62", "#7a4a38"];
 
 /**
  * Combines OpenAI's speaker-labelled segments with Whisper's word timings. The

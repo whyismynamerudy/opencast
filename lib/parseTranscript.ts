@@ -2,7 +2,7 @@ import type { Speaker, Word } from "./types";
 
 export type ParsedTranscript = { words: Word[]; speakers: Speaker[] };
 
-const COLORS = ["#dd6953", "#6e9cdb", "#a477d4", "#d6a540", "#4da58a"];
+const COLORS = ["#a8402f", "#31547d", "#5d6b2f", "#96650f", "#2f6b62"];
 
 export function parseTranscript(source: string, filename = "transcript"): ParsedTranscript {
   const text = source.replace(/^\uFEFF/, "").trim();

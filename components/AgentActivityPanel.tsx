@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, CheckCircle2, CircleAlert, Radio, Sparkles } from "lucide-react";
+import { Bot, CheckCircle2, CircleAlert, Radio, Terminal } from "lucide-react";
 import { useEditorStore } from "@/lib/store";
 
 export function AgentActivityPanel({ webMcpAvailable }: { webMcpAvailable: boolean }) {
@@ -23,13 +23,13 @@ export function AgentActivityPanel({ webMcpAvailable }: { webMcpAvailable: boole
     <aside className="agent-panel">
       <div className="agent-heading">
         <div className="agent-icon"><Bot size={18} /></div>
-        <div><p className="panel-kicker">AGENT ACTIVITY</p><h2>Co-editor</h2></div>
-        <span className={`connection ${webMcpAvailable ? "live" : ""}`}><Radio size={12} />{webMcpAvailable ? "WebMCP live" : "Preview mode"}</span>
+        <div><p className="panel-kicker">Agent</p><h2>Co-editor</h2></div>
+        <span className={`connection ${webMcpAvailable ? "live" : ""}`}><Radio size={12} />{webMcpAvailable ? "Live" : "Preview"}</span>
       </div>
       <p className="agent-copy">{webMcpAvailable ? "Shared controls are live." : "Awaiting a WebMCP browser."}</p>
       <div className="tool-chips">
-        <button type="button" onClick={() => demoTool("remove_fillers")}><Sparkles size={13} /> Test remove_fillers</button>
-        <button type="button" onClick={() => demoTool("remove_silences")}><Sparkles size={13} /> Test remove_silences</button>
+        <button type="button" onClick={() => demoTool("remove_fillers")}><Terminal size={13} /> remove_fillers</button>
+        <button type="button" onClick={() => demoTool("remove_silences")}><Terminal size={13} /> remove_silences</button>
       </div>
       <div className="activity-list" aria-live="polite">
         {!activity.length && <div className="activity-empty">Awaiting the first edit.</div>}

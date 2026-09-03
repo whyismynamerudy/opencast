@@ -1,6 +1,6 @@
 "use client";
 
-import { RotateCcw, Scissors, WandSparkles } from "lucide-react";
+import { Eraser, RotateCcw, Scissors } from "lucide-react";
 import { isWordCut } from "@/lib/edits";
 import { useEditorStore } from "@/lib/store";
 import type { TimeRange } from "@/lib/types";
@@ -29,9 +29,9 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   return (
     <section className="transcript-panel">
       <header className="transcript-header">
-        <div><p className="panel-kicker">{activeSourceName ? `TRANSCRIPT · ${activeSourceName}` : "TRANSCRIPT"}</p><h2>{activeSourceName || "Edit the words. The recording follows."}</h2></div>
+        <div><p className="panel-kicker">Transcript</p><h2>{activeSourceName || "Edit the words. The recording follows."}</h2></div>
         <div className="quick-actions" aria-label="Transcript actions">
-          <button type="button" onClick={() => removeFillers()}><WandSparkles size={14} /> Remove fillers</button>
+          <button type="button" onClick={() => removeFillers()}><Eraser size={14} /> Remove fillers</button>
           <button type="button" onClick={() => removeSilences()}><Scissors size={14} /> Remove silence</button>
           <button type="button" onClick={action} disabled={!selected.length}>{selectedDeleted === selected.length ? <RotateCcw size={14} /> : <Scissors size={14} />}{selectedDeleted === selected.length ? "Restore" : "Cut"}</button>
         </div>
@@ -44,7 +44,7 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
           const cut = isWordCut(word, cuts);
           return (
             <span className="transcript-word-wrap" key={word.id}>
-              {startsTurn && <span className="speaker-chip" style={{ "--speaker": speaker?.color ?? "#6e9cdb" } as React.CSSProperties}>{speaker?.name ?? `Speaker ${word.speaker + 1}`}</span>}
+              {startsTurn && <span className="speaker-chip" style={{ "--speaker": speaker?.color ?? "#31547d" } as React.CSSProperties}>{speaker?.name ?? `Speaker ${word.speaker + 1}`}</span>}
               <button
                 type="button"
                 className={`transcript-word ${selected.includes(word.id) ? "selected" : ""} ${cut ? "cut" : ""} ${active ? "active" : ""}`}

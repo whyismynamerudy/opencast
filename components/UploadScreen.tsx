@@ -47,15 +47,15 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
           {onSignOut && <button type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button>}
         </div>}
         <div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div>
-        <p className="eyebrow">MULTICAM · AGENT-READY</p>
-        <h1>Upload your recordings.</h1>
-        <p className="welcome-copy">Add one recording or every angle. Processing starts automatically.</p>
+        <p className="eyebrow">Ingest</p>
+        <h1>Start with the recordings.</h1>
+        <p className="welcome-copy">One take or every angle. Processing starts on its own.</p>
 
         <div className="upload-grid media-only">
           <button className="upload-card" onClick={() => mediaInput.current?.click()} type="button" disabled={importing}>
             {importing ? <LoaderCircle className="spin" /> : <CloudUpload />}
             <span>{sources.length ? "Add more recordings" : "Choose audio or video files"}</span>
-            <small>MP4, MOV, WebM, MP3, M4A, WAV and more. Select all angles together; processing starts automatically.</small>
+            <small>MP4 · MOV · WebM · MP3 · M4A · WAV</small>
           </button>
         </div>
 
@@ -65,8 +65,8 @@ export function UploadScreen({ onOpenProjects, onSignOut }: UploadScreenProps) {
           <section className="processing-queue" aria-live="polite">
             <header>
               <div>
-                <p className="panel-kicker">PREPARING YOUR EDIT</p>
-                <h2>{allSourcesReady ? "Your recordings are ready." : "We’re building your editing workspace."}</h2>
+                <p className="panel-kicker">Preparing</p>
+                <h2>{allSourcesReady ? "Ready to edit." : "Building your workspace."}</h2>
               </div>
               {allSourcesReady ? <CheckCircle2 size={20} /> : <LoaderCircle className="spin" size={20} />}
             </header>

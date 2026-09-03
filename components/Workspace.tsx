@@ -200,13 +200,11 @@ function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, o
 
   return (
     <main className="library-shell">
-      <span className="ambient-orb library-orb-one" aria-hidden="true" />
-      <span className="ambient-orb library-orb-two" aria-hidden="true" />
       <section className="library-card">
         <header className="library-topbar"><div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div><div><span className={`workspace-connection ${webMcpAvailable ? "live" : ""}`}>{webMcpAvailable ? "Agent connected" : "Workspace"}</span><button className="sign-out" type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button></div></header>
         <div className="library-layout">
           <div className="library-main">
-            <div className="library-heading"><div><p className="eyebrow">YOUR STUDIO</p><h1>Make the next cut.</h1><p>Your projects, sources, and edits — together.</p></div><FolderOpen size={30} /></div>
+            <div className="library-heading"><div><p className="eyebrow">Projects</p><h1>Make the next cut.</h1></div></div>
             <form className="new-project" onSubmit={create}><input aria-label="New project title" placeholder="Name a new project" value={title} onChange={(event) => setTitle(event.target.value)} /><button type="submit" disabled={busyId === "new"}>{busyId === "new" ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} New project</button></form>
             {(error || actionError) && <p className="form-error">{actionError || error}</p>}
             <div className="library-section-heading"><span>Projects</span><small>{loading ? "Syncing…" : `${projects.length} saved`}</small></div>
@@ -219,9 +217,8 @@ function ProjectLibrary({ projects, loading, error, webMcpAvailable, onCreate, o
           </div>
 
           <aside className="library-rail" aria-label="Workspace summary">
-            <div className="library-visual" aria-hidden="true"><i /><i /><i /></div>
-            <p className="panel-kicker">WORKSPACE</p>
-            <h2>Editing, in motion.</h2>
+            <p className="panel-kicker">Workspace</p>
+            <h2>On the desk</h2>
             <div className="library-metrics">
               <span><strong>{projects.length}</strong><small>projects</small></span>
               <span><strong>{totalSources}</strong><small>sources</small></span>
