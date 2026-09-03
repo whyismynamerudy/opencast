@@ -8,6 +8,7 @@ import type { TimeRange } from "@/lib/types";
 export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   const words = useEditorStore((state) => state.words);
   const speakers = useEditorStore((state) => state.speakers);
+  const sources = useEditorStore((state) => state.mediaSources);
   const activeSourceId = useEditorStore((state) => state.activeSourceId);
   const activeSourceName = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId)?.name);
   const selected = useEditorStore((state) => state.selectedWordIds);
@@ -25,6 +26,19 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
     : words;
   const selectedDeleted = sourceWords.filter((word) => selected.includes(word.id) && word.deleted).length;
   const action = () => selectedDeleted === selected.length ? restoreWords(selected) : deleteWords(selected);
+
+  // Auto-detected speakers are stored as "<file name> · <label>" so they stay
+  // unique across sources; the printed tag should never carry the file name.
+  const speakerLabel = (name: string | undefined, wordSourceId: string | undefined, fallback: number): string => {
+    if (!name) return `Speaker ${fallback + 1}`;
+    const source = sources.find((item) => item.id === wordSourceId);
+    if (source && name.startsWith(`${source.name} · `)) {
+      const short = name.slice(source.name.length + 3);
+      if (sources.length > 1) return `${source.role} · ${short}`;
+      return short.length <= 2 ? `Speaker ${short}` : short;
+    }
+    return name;
+  };
 
   return (
     <section className="transcript-panel">
@@ -44,7 +58,7 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
           const cut = isWordCut(word, cuts);
           return (
             <span className="transcript-word-wrap" key={word.id}>
-              {startsTurn && <span className="speaker-chip" style={{ "--speaker": speaker?.color ?? "#31547d" } as React.CSSProperties}>{speaker?.name ?? `Speaker ${word.speaker + 1}`}</span>}
+              {startsTurn && <span className="speaker-chip" style={{ "--speaker": speaker?.color ?? "#31547d" } as React.CSSProperties}>{speakerLabel(speaker?.name, word.sourceId, word.speaker)}</span>}
               <button
                 type="button"
                 className={`transcript-word ${selected.includes(word.id) ? "selected" : ""} ${cut ? "cut" : ""} ${active ? "active" : ""}`}
