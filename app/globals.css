@@ -635,6 +635,25 @@ h1, .library-heading h1, .login-card h1 {
   scrollbar-color: var(--proof-rule) transparent;
   line-height: 2.05;
 }
+.transcript-pending {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 290px;
+  margin: 12vh auto 0;
+  padding: 16px;
+  color: var(--proof-muted);
+  border: var(--hair) solid var(--proof-rule);
+  background: color-mix(in oklab, var(--proof-paper) 78%, var(--paper-3));
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+.transcript-pending svg { flex: none; color: var(--proof-accent); }
+.transcript-pending strong { display: block; color: var(--proof-ink); font-size: 10px; font-weight: 600; }
+.transcript-pending span { display: block; margin-top: 3px; }
 .transcript-word-wrap { position: relative; }
 .speaker-chip {
   display: inline;

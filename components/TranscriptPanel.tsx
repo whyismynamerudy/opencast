@@ -1,7 +1,8 @@
 "use client";
 
-import { Eraser, RotateCcw, Scissors } from "lucide-react";
+import { Eraser, LoaderCircle, RotateCcw, Scissors } from "lucide-react";
 import { isWordCut } from "@/lib/edits";
+import { workerStageLabel } from "@/lib/mediaStatus";
 import { useEditorStore } from "@/lib/store";
 import type { TimeRange } from "@/lib/types";
 
@@ -11,6 +12,7 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   const sources = useEditorStore((state) => state.mediaSources);
   const activeSourceId = useEditorStore((state) => state.activeSourceId);
   const activeSourceName = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId)?.name);
+  const activeSource = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId));
   const selected = useEditorStore((state) => state.selectedWordIds);
   const time = useEditorStore((state) => state.playbackTime);
   const toggle = useEditorStore((state) => state.toggleSelectedWord);
@@ -51,6 +53,13 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
         </div>
       </header>
       <div className="transcript-scroll">
+        {!sourceWords.length && activeSource && <div className="transcript-pending">
+          <LoaderCircle className="spin" size={18} />
+          <div>
+            <strong>Transcript incoming.</strong>
+            <span>{workerStageLabel(activeSource.processingStage ?? activeSource.status)}</span>
+          </div>
+        </div>}
         {sourceWords.map((word, index) => {
           const speaker = speakers.find((item) => item.id === word.speaker);
           const startsTurn = index === 0 || sourceWords[index - 1].speaker !== word.speaker;

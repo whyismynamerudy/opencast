@@ -24,6 +24,8 @@ assert.equal(sourceProgress(source({ status: "uploading", uploadProgress: 0.5 })
 assert.equal(sourceProgress(source({ status: "transcribing", processingProgress: 0.5 })), 0.625);
 assert.equal(sourceProgress(source({ status: "ready" })), 1);
 assert.equal(workerStageLabel("extracting"), "Extracting episode audio");
+assert.equal(workerStageLabel("uploading"), "Uploading the original");
+assert.equal(workerStageLabel("transcribing full recording · speakers + word timing"), "Transcribing full recording · speakers + word timing");
 assert.match(sourceStatusLabel(source({ status: "transcribing", processingProgress: 0.4, processingStage: "transcribing 1 of 6" })), /Transcribing 1 of 6/);
 assert.equal(sourceStatusLabel(source({ status: "ready" })), "Transcript ready");
 

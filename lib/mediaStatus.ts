@@ -4,11 +4,18 @@ export function workerStageLabel(stage?: string): string {
   switch (stage) {
     case "authorizing": return "Starting transcription";
     case "queued": return "Waiting for the transcription worker";
+    case "resuming": return "Resuming safely from the last checkpoint";
+    case "uploading": return "Uploading the original";
+    case "uploaded": return "Starting transcription";
     case "downloading": return "Preparing source media";
     case "extracting": return "Extracting episode audio";
     case "finalizing": return "Building the editable transcript";
     case "complete": return "Transcript ready";
-    default: return stage?.startsWith("transcribing") ? stage.replace("transcribing", "Transcribing") : "Transcribing";
+    default:
+      if (stage?.startsWith("transcribing")) return stage.replace("transcribing", "Transcribing");
+      if (stage?.startsWith("retrying")) return stage.replace("retrying", "Retrying");
+      if (stage?.startsWith("recovering")) return stage.replace("recovering", "Recovering");
+      return "Transcribing";
   }
 }
 

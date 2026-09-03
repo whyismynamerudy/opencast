@@ -16,7 +16,7 @@ After sign-in, the project library lets you create, open, rename, and delete edi
 - A shared master timeline. Source transcripts retain native source times while the editor, agent tools, cuts, and program-angle selections use synchronized master times.
 - Transcript edits: select/cut/restore words, remove fillers and silence, split, trim, undo/redo, speaker labels, SRT export, and local single-source MP4/MP3 export.
 - A direct browser-to-Vercel-Blob upload path. Files larger than 100 MB use multipart upload, so a 60-minute HD source does not pass through a Next.js request or need to be loaded into server memory.
-- An included Docker media worker for long sources. It streams the original to Fly disk, creates low-bitrate audio segments, calls OpenAI for word timing plus diarization, and returns source-aware transcript data to the browser. Transient API/download failures retry automatically, while durable chunk checkpoints make a manual retry resume instead of starting over.
+- An included Docker media worker for long sources. It streams the original to Fly disk, creates one low-bitrate audio file, then runs diarization and word timing concurrently. Oversized compressed audio falls back to bounded segments. Transient API/download failures retry automatically, while durable checkpoints make a manual retry resume instead of starting over.
 - A WebMCP editing surface with source upload requests, source listing/role/sync control, worker-job queueing and status, source transcript reads, program-cut proposal/application, and all original text-editing controls.
 
 The source-aware program timeline is complete and shared between the person and agent. Multicam MP4/MP3 rendering is deliberately routed to a worker instead of browser ffmpeg.wasm; the current UI blocks accidental local multicam renders and continues to support SRT export. This keeps the hackathon app responsive with hour-long HD originals while leaving server rendering as the next production worker task.
@@ -29,8 +29,8 @@ local files chosen in OpenCast
         ├── direct multipart upload ──> Vercel Blob (original source)
         │                                  │
         │                                  └──> Docker/Fly.io media worker
-        │                                       ffmpeg: 16 kHz / 24 kbps audio chunks
-        │                                       OpenAI: diarization + word timing
+        │                                       ffmpeg: 16 kHz / 24 kbps audio
+        │                                       OpenAI: diarization + word timing (parallel)
         │                                              │
         └── local object URL for immediate preview     ▼
                                       source transcript + source/master timestamps
@@ -38,7 +38,7 @@ local files chosen in OpenCast
                                      OpenCast master timeline + WebMCP tools
 ```
 
-The worker avoids an in-memory copy of the original. It streams the original to the mounted Fly volume, creates 5-minute Ogg/Opus audio chunks, and sends only those small chunks to OpenAI. Completed jobs retain only their compact result; failed/in-progress jobs retain their original, segments, and completed transcription checkpoints for up to 24 hours so they can recover after a restart or resume on retry. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
+The worker avoids an in-memory copy of the original. It streams the original to the mounted Fly volume and converts it to 16 kHz mono Ogg/Opus at 24 kbps. If that audio is at or below the 20 MiB safety limit, it makes just two concurrent transcription requests—one for speakers and one for word timing. That covers roughly two hours of podcast audio. Larger compressed inputs fall back to five-minute chunks, still with only two requests in flight at once. Completed jobs retain only their compact result; failed/in-progress jobs retain their original, audio, and completed checkpoints for up to 24 hours so they can recover after a restart or resume on retry. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
 
 ## Quick start: transcript/editor only
 
@@ -88,8 +88,10 @@ Deploy it from the worker directory with `fly deploy`. Configure these secrets a
 OPENAI_API_KEY=
 CORS_ORIGIN=https://your-opencast-app.example.com
 OPENCAST_WORKER_SIGNING_SECRET=
-# Five-minute recovery units are the default. Keep this at 300 for long episodes.
+# Used only for compressed audio over the single-file safety threshold.
 OPENCAST_SEGMENT_SECONDS=300
+# Default is 20 MiB; keep this below the transcription endpoint's file cap.
+OPENCAST_SINGLE_AUDIO_MAX_BYTES=20971520
 # Transient OpenAI/download failures retry automatically four times by default.
 OPENCAST_TRANSCRIPTION_MAX_ATTEMPTS=4
 # Failed/in-progress job checkpoints are pruned after one day by default.
@@ -106,7 +108,7 @@ This hackathon reference uploads originals with **public, unguessable Blob URLs*
 
 1. Choose every local source together. The first two default to host and guest; change roles in the Sources panel as needed.
 2. Set the manual sync offset if the recordings did not begin together. Positive means that source begins later on the master timeline.
-3. Every source starts processing automatically once its direct upload completes. OpenCast shows upload, audio-preparation, and transcription progress for each angle; the editor opens as soon as the first transcript is ready while the remaining angles continue in the background.
+3. Every source begins direct upload immediately; OpenCast opens the editor with the local preview and timeline straight away. Storage and transcription continue in the background, with the editable transcript appearing in place when it is ready.
 4. Select an angle and use **Cut to …** at the playhead to choose the program camera for the current program segment.
 
 ## WebMCP workflow
@@ -128,7 +130,7 @@ Every tool calls the same Zustand action hub as the UI. Agent activity is shown 
 
 ## OpenAI use and cost shape
 
-For every audio segment, the worker makes two requests: `gpt-4o-transcribe-diarize` for speaker-labelled turns and `whisper-1` with word timestamps for edit precision. The original HD video is never sent to the transcription endpoint. Check the current [OpenAI audio model pricing](https://developers.openai.com/api/docs/pricing) before launch and enforce authentication/rate limits before making a public service.
+For each compact audio input, the worker makes two concurrent requests: `gpt-4o-transcribe-diarize` for speaker-labelled turns and `whisper-1` with word timestamps for edit precision. The original HD video is never sent to the transcription endpoint. Each completed response's OpenAI `usage` field and elapsed time are retained with the worker job for accurate per-job diagnostics. Check the current [OpenAI audio model pricing](https://developers.openai.com/api/docs/pricing) before launch and enforce authentication/rate limits before making a public service.
 
 ## Verification
 

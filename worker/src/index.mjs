@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { audioPlanForSize, labelForChunk, singleAudioLimitBytes } from "./mediaPlan.mjs";
 import { isRetryableStatus, withTransientRetries } from "./retry.mjs";
 
 const run = promisify(execFile);
@@ -145,9 +146,23 @@ function jobMetadata(job) {
     progress: job.progress,
     error: job.error,
     result: job.result,
+    metrics: job.metrics,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
+}
+
+function ensureJobMetrics(job) {
+  if (!job.metrics || typeof job.metrics !== "object") {
+    job.metrics = { requests: [] };
+  }
+  if (!Array.isArray(job.metrics.requests)) job.metrics.requests = [];
+  return job.metrics;
+}
+
+function recordTranscriptionMetric(job, metric) {
+  const metrics = ensureJobMetrics(job);
+  metrics.requests.push(metric);
 }
 
 async function persistJob(job) {
@@ -187,25 +202,53 @@ async function downloadSource(url, path, jobId) {
   await rename(partialPath, path);
 }
 
-async function makeAudioSegments(sourcePath, outputDirectory) {
-  const seconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 300), 1_800));
+async function inputPathsFromManifest(manifest, outputDirectory) {
+  if (!Array.isArray(manifest?.files) || !manifest.files.length) return null;
+  const paths = manifest.files.map((name) => join(outputDirectory, name));
+  if (!(await Promise.all(paths.map((path) => fileExists(path)))).every(Boolean)) return null;
+  return {
+    paths,
+    plan: manifest.plan === "single" ? "single" : "segmented",
+    segmentSeconds: Number(manifest.segmentSeconds ?? manifest.seconds ?? 0) || 0,
+    audioBytes: Number(manifest.audioBytes) || null,
+  };
+}
+
+async function makeAudioInputs(sourcePath, outputDirectory) {
   const manifestPath = join(outputDirectory, "segments.json");
   const existingManifest = await readJsonFile(manifestPath);
-  if (Array.isArray(existingManifest?.files) && existingManifest.files.length) {
-    const paths = existingManifest.files.map((name) => join(outputDirectory, name));
-    if ((await Promise.all(paths.map((path) => fileExists(path)))).every(Boolean)) return paths;
-  }
+  const existingInputs = await inputPathsFromManifest(existingManifest, outputDirectory);
+  if (existingInputs) return existingInputs;
+
   const existing = await readdir(outputDirectory);
-  await Promise.all(existing.filter((name) => /^audio-\d+\.ogg$/.test(name)).map((name) => rm(join(outputDirectory, name), { force: true })));
-  const output = join(outputDirectory, "audio-%03d.ogg");
+  await Promise.all(existing.filter((name) => /^audio(?:-\d+)?\.(?:ogg|partial\.ogg)$/.test(name)).map((name) => rm(join(outputDirectory, name), { force: true })));
+
+  const temporarySingle = join(outputDirectory, "audio.partial.ogg");
+  const singleAudio = join(outputDirectory, "audio.ogg");
   await run("ffmpeg", [
     "-hide_banner", "-loglevel", "error", "-y", "-i", sourcePath,
     "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", "24k",
-    "-f", "segment", "-segment_time", String(seconds), "-reset_timestamps", "1", output,
+    temporarySingle,
+  ]);
+  await rename(temporarySingle, singleAudio);
+
+  const audioBytes = (await stat(singleAudio)).size;
+  const plan = audioPlanForSize(audioBytes, singleAudioLimitBytes());
+  if (plan === "single") {
+    await writeJsonAtomic(manifestPath, { version: 2, plan, files: ["audio.ogg"], segmentSeconds: 0, audioBytes });
+    return { paths: [singleAudio], plan, segmentSeconds: 0, audioBytes };
+  }
+
+  const segmentSeconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 300), 1_800));
+  const output = join(outputDirectory, "audio-%03d.ogg");
+  await run("ffmpeg", [
+    "-hide_banner", "-loglevel", "error", "-y", "-i", singleAudio,
+    "-c:a", "copy", "-f", "segment", "-segment_time", String(segmentSeconds), "-reset_timestamps", "1", output,
   ]);
   const files = (await readdir(outputDirectory)).filter((name) => /^audio-\d+\.ogg$/.test(name)).sort();
-  await writeJsonAtomic(manifestPath, { seconds, files });
-  return files.map((name) => join(outputDirectory, name));
+  if (!files.length) throw new Error("Could not prepare transcription audio segments.");
+  await writeJsonAtomic(manifestPath, { version: 2, plan, files, segmentSeconds, audioBytes });
+  return { paths: files.map((name) => join(outputDirectory, name)), plan, segmentSeconds, audioBytes };
 }
 
 async function transcribeRequest(filePath, model, responseFormat, extra = [], context = {}) {
@@ -302,6 +345,7 @@ async function processJob(job) {
   try {
     job.status = "processing";
     job.error = null;
+    const metrics = ensureJobMetrics(job);
     await mkdir(workDirectory, { recursive: true });
     const extension = extname(job.filename || new URL(job.sourceUrl).pathname) || ".media";
     const sourcePath = join(workDirectory, `source${extension.replace(/[^.a-zA-Z0-9]/g, "")}`);
@@ -312,53 +356,103 @@ async function processJob(job) {
       console.info(`[job ${job.id}] Downloading ${job.filename}`);
       await downloadSource(job.sourceUrl, sourcePath, job.id);
     }
+    metrics.sourceBytes = (await stat(sourcePath)).size;
     job.stage = "extracting";
     job.progress = 0.15;
     await persistJob(job);
-    const segments = await makeAudioSegments(sourcePath, workDirectory);
-    if (!segments.length) throw new Error("No audio track was found in this media source.");
-    const segmentSeconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 300), 1_800));
+    const audioInputs = await makeAudioInputs(sourcePath, workDirectory);
+    if (!audioInputs.paths.length) throw new Error("No audio track was found in this media source.");
+    metrics.compressedAudioBytes = audioInputs.audioBytes;
+    metrics.audioPlan = audioInputs.plan;
+    metrics.audioInputCount = audioInputs.paths.length;
+    await persistJob(job);
+
+    const segments = audioInputs.paths;
+    const segmentSeconds = audioInputs.segmentSeconds;
     const chunks = [];
+    const totalRequests = segments.length * 2;
+    let completeRequests = 0;
     for (let index = 0; index < segments.length; index++) {
       const chunkNumber = index + 1;
+      const chunkLabel = labelForChunk(chunkNumber, segments.length);
       const diarizedPath = join(workDirectory, `chunk-${String(index).padStart(3, "0")}-diarized.json`);
       const timedPath = join(workDirectory, `chunk-${String(index).padStart(3, "0")}-timed.json`);
       let diarized = await readJsonFile(diarizedPath);
       let timed = await readJsonFile(timedPath);
+      if (diarized) completeRequests += 1;
+      if (timed) completeRequests += 1;
 
-      job.stage = `transcribing ${chunkNumber} of ${segments.length} · speakers`;
-      job.progress = 0.15 + (index / segments.length) * 0.8;
+      const pendingLabels = [!diarized && "speakers", !timed && "word timing"].filter(Boolean);
+      job.stage = pendingLabels.length
+        ? `transcribing ${chunkLabel} · ${pendingLabels.join(" + ")}`
+        : `recovering ${chunkLabel}`;
+      job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
       await persistJob(job);
+
+      // The two requests are independent. Running them together removes the
+      // serial wait without sacrificing recovery: each response is persisted
+      // before the task resolves, so a restart retries only the missing half.
+      const tasks = [];
       if (!diarized) {
-        diarized = await transcribeRequest(segments[index], "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]], {
-          jobId: job.id,
-          chunkNumber,
-          onRetry: async ({ nextAttempt, delayMs }) => {
-            job.stage = `retrying ${chunkNumber} of ${segments.length} · speakers (${nextAttempt})`;
-            await persistJob(job);
-            console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying speaker labels for chunk ${chunkNumber}.`);
-          },
-        });
-        await writeJsonAtomic(diarizedPath, diarized);
+        tasks.push((async () => {
+          const startedAt = Date.now();
+          const payload = await transcribeRequest(segments[index], "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]], {
+            jobId: job.id,
+            chunkNumber,
+            onRetry: async ({ nextAttempt, delayMs }) => {
+              job.stage = `retrying ${chunkLabel} · speakers (${nextAttempt})`;
+              await persistJob(job);
+              console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying speaker labels for ${chunkLabel}.`);
+            },
+          });
+          await writeJsonAtomic(diarizedPath, payload);
+          diarized = payload;
+          completeRequests += 1;
+          recordTranscriptionMetric(job, {
+            model: "gpt-4o-transcribe-diarize",
+            chunkNumber,
+            durationMs: Date.now() - startedAt,
+            inputBytes: (await stat(segments[index])).size,
+            usage: payload?.usage ?? null,
+            completedAt: Date.now(),
+          });
+          job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
+          await persistJob(job);
+        })());
       }
-
-      job.stage = `transcribing ${chunkNumber} of ${segments.length} · word timing`;
-      job.progress = 0.15 + ((index + 0.5) / segments.length) * 0.8;
-      await persistJob(job);
       if (!timed) {
-        timed = await transcribeRequest(segments[index], "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]], {
-          jobId: job.id,
-          chunkNumber,
-          onRetry: async ({ nextAttempt, delayMs }) => {
-            job.stage = `retrying ${chunkNumber} of ${segments.length} · word timing (${nextAttempt})`;
-            await persistJob(job);
-            console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying word timing for chunk ${chunkNumber}.`);
-          },
-        });
-        await writeJsonAtomic(timedPath, timed);
+        tasks.push((async () => {
+          const startedAt = Date.now();
+          const payload = await transcribeRequest(segments[index], "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]], {
+            jobId: job.id,
+            chunkNumber,
+            onRetry: async ({ nextAttempt, delayMs }) => {
+              job.stage = `retrying ${chunkLabel} · word timing (${nextAttempt})`;
+              await persistJob(job);
+              console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying word timing for ${chunkLabel}.`);
+            },
+          });
+          await writeJsonAtomic(timedPath, payload);
+          timed = payload;
+          completeRequests += 1;
+          recordTranscriptionMetric(job, {
+            model: "whisper-1",
+            chunkNumber,
+            durationMs: Date.now() - startedAt,
+            inputBytes: (await stat(segments[index])).size,
+            usage: payload?.usage ?? null,
+            completedAt: Date.now(),
+          });
+          job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
+          await persistJob(job);
+        })());
       }
+      const outcomes = await Promise.allSettled(tasks);
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+      if (!diarized || !timed) throw new Error(`OpenAI did not return a complete transcription for ${chunkLabel}.`);
       chunks.push({ diarized, timed });
-      job.progress = 0.15 + ((index + 1) / segments.length) * 0.8;
+      job.progress = 0.15 + (completeRequests / totalRequests) * 0.8;
       await persistJob(job);
     }
     job.stage = "finalizing";

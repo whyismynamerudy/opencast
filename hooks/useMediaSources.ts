@@ -34,17 +34,29 @@ export function useMediaSources() {
       const imported = await Promise.all(files.map(async (file, index) => {
         const localUrl = URL.createObjectURL(file);
         try {
-          const duration = await probeMediaDuration(file, localUrl);
           const sourceId = editor.addMediaSource({
             name: file.name,
             role: roles?.[index] ?? ROLES[Math.min(editor.mediaSources.length + index, ROLES.length - 1)],
             kind: file.type.startsWith("audio/") ? "audio" : "video",
-            duration,
+            // Upload begins immediately. Browser metadata can be slow on large
+            // MP4s, but it is not a prerequisite for preview or cloud ingest.
+            duration: 0,
             file,
             localUrl,
           });
           editor.addActivity("media_source_added", `Added ${file.name} as a ${roles?.[index] ?? "source"} angle.`, "success");
           editor.updateMediaSource(sourceId, { status: "uploading", uploadProgress: 0, error: null });
+
+          void probeMediaDuration(file, localUrl)
+            .then((duration) => {
+              useEditorStore.getState().updateMediaSource(sourceId, { duration });
+            })
+            .catch(() => {
+              // The worker transcript supplies a duration later. Never make a
+              // large upload wait on a browser codec or metadata response.
+              useEditorStore.getState().addActivity("media_metadata", `Reading duration for ${file.name} is taking longer than usual. Upload continues.`, "info");
+            });
+
           try {
             const stored = await uploadMediaSource(sourceId, file, (percentage) => {
               useEditorStore.getState().updateMediaSource(sourceId, { uploadProgress: percentage });

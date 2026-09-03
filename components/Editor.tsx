@@ -99,7 +99,9 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
     return () => { cancelled = true; };
   }, [exportRequest]);
 
-  if (!words.length) return <UploadScreen onOpenProjects={onOpenProjects} onSignOut={onSignOut} />;
+  // A local source is immediately usable for preview and timeline navigation.
+  // Transcript words arrive in-place once the background worker is finished.
+  if (!sourceCount) return <UploadScreen onOpenProjects={onOpenProjects} onSignOut={onSignOut} />;
 
   return (
     <main className={`editor-shell ${inspectorOpen ? "" : "inspector-closed"}`}>
