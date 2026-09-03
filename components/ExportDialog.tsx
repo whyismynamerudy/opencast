@@ -17,7 +17,7 @@ export function ExportDialog() {
         <button type="button" onClick={() => requestExport("mp3")} disabled={status === "rendering"}><Music2 size={15} /> MP3</button>
         <button type="button" onClick={() => requestExport("srt")} disabled={status === "rendering"}><FileText size={15} /> SRT</button>
       </div>
-      <p className={error ? "export-status error" : "export-status"}>{status === "rendering" ? <><Download className="spin" size={13} /> Rendering locally…</> : error || "No uploads. No server render."}</p>
+      <p className={error ? "export-status error" : "export-status"}>{status === "rendering" ? <><Download className="spin" size={13} /> Rendering locally…</> : error || "Renders in this browser."}</p>
     </div>
   );
 }

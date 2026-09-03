@@ -8,6 +8,7 @@ import { renderCutMedia } from "@/lib/ffmpeg";
 import { downloadBlob, wordsToSrt } from "@/lib/serializeTranscript";
 import { useEditorStore } from "@/lib/store";
 import { AgentActivityPanel } from "./AgentActivityPanel";
+import { EditPanel } from "./EditPanel";
 import { ExportDialog } from "./ExportDialog";
 import { MediaPreview, formatTime } from "./MediaPreview";
 import { Timeline } from "./Timeline";
@@ -130,9 +131,10 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
         </div>
         <aside className="studio-inspector" aria-label="Project details">
           <div className="inspector-scroll">
+          <EditPanel />
           <SourceManager />
-          <AgentActivityPanel webMcpAvailable={webMcpAvailable} />
           <ExportDialog />
+          <AgentActivityPanel webMcpAvailable={webMcpAvailable} />
           <div className="project-summary"><span>{words.length} words</span><span>{sourceCount} source{sourceCount === 1 ? "" : "s"}</span><span>{formatTime(duration)} master</span><span>{formatTime(Math.max(0, duration - cuts.reduce((sum, cut) => sum + cut.end - cut.start, 0)))} final</span></div>
           </div>
         </aside>

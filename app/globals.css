@@ -789,9 +789,57 @@ h1, .library-header h1, .login-card h1 {
 .studio-inspector { min-width: 0; overflow: hidden; border-left: var(--glass-border); background: var(--glass); backdrop-filter: var(--glass-blur); transition: opacity 0.16s var(--ease-out); }
 .inspector-closed .studio-inspector { border-left-color: transparent; opacity: 0; pointer-events: none; }
 .inspector-scroll { height: 100%; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--rule-2) transparent; }
-.source-manager, .agent-panel, .export-box { padding: 18px; border-bottom: var(--hair) solid var(--rule); }
-.transcript-header h2, .timeline-panel h2, .agent-panel h2, .source-manager h2, .export-box h3 { margin: 4px 0 0; }
-.agent-panel h2, .source-manager h2, .export-box h3 { color: var(--ink); font-family: var(--font-display); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.edit-hub, .source-manager, .agent-panel, .export-box { padding: 18px; border-bottom: var(--hair) solid var(--rule); }
+.transcript-header h2, .timeline-panel h2, .edit-hub h2, .agent-panel h2, .source-manager h2, .export-box h3 { margin: 4px 0 0; }
+.edit-hub h2, .agent-panel h2, .source-manager h2, .export-box h3 { color: var(--ink); font-family: var(--font-display); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* the cutting desk — user-facing controls on the shared action hub */
+.hub-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 14px; }
+.hub-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 9px;
+  color: var(--ink-2);
+  border: var(--hair) solid var(--rule);
+  background: oklch(97% 0.012 78 / 0.5);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-align: left;
+  white-space: nowrap;
+}
+.hub-actions button:hover:not(:disabled) { color: var(--ink); border-color: var(--rule-2); }
+.hub-actions button:first-child { grid-column: 1 / -1; }
+.hub-selection { margin-top: 14px; padding: 12px; border-left: 2px solid var(--accent); background: oklch(97% 0.012 78 / 0.55); }
+.hub-selection blockquote { margin: 9px 0 11px; color: var(--ink-2); font-size: 13px; font-style: italic; line-height: 1.5; }
+.hub-selection-actions { display: flex; gap: 6px; }
+.hub-selection-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  color: var(--accent-ink);
+  border: 0;
+  background: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.hub-selection-actions button:hover { background: var(--accent-bright); }
+.hub-selection-actions select { flex: 1; min-width: 0; padding: 6px; color: var(--ink); border: var(--hair) solid var(--rule); background: var(--proof-paper); font-size: 11px; }
+.hub-correct { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; margin-top: 8px; }
+.hub-correct input { width: 100%; padding: 7px 9px; color: var(--ink); border: var(--hair) solid var(--rule); background: var(--proof-paper); font-size: 12px; }
+.hub-correct button { display: grid; place-items: center; width: 32px; color: var(--ink-2); border: var(--hair) solid var(--rule); background: transparent; }
+.hub-correct button:hover:not(:disabled) { color: var(--accent-bright); border-color: var(--accent); }
+.speaker-list { display: grid; gap: 6px; margin-top: 16px; }
+.speaker-list .panel-kicker { margin-bottom: 4px; }
+.speaker-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: center; }
+.speaker-swatch { width: 9px; height: 9px; flex: none; }
+.speaker-row input { width: 100%; padding: 6px 8px; color: var(--ink); border: var(--hair) solid transparent; background: transparent; font-size: 12px; }
+.speaker-row input:hover { border-color: var(--rule); }
+.speaker-row input:focus { border-color: var(--rule-2); background: var(--proof-paper); }
 
 .source-manager-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .source-manager-copy { margin: 12px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }

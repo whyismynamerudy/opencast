@@ -7,6 +7,7 @@ import { useMediaWorker } from "@/hooks/useMediaWorker";
 import { sourceProgress, sourceStatusLabel } from "@/lib/mediaStatus";
 import { programSegmentAt, SOURCE_ROLES, type SourceRole } from "@/lib/multicam";
 import { useEditorStore } from "@/lib/store";
+import { formatTime } from "./MediaPreview";
 
 export function SourceManager() {
   const input = useRef<HTMLInputElement>(null);
@@ -41,7 +42,7 @@ export function SourceManager() {
         <div><p className="panel-kicker">SOURCES</p><h2>Angles on one clock.</h2></div>
         <button type="button" className="icon-button" onClick={() => input.current?.click()} aria-label="Add media source"><Plus size={17} /></button>
       </header>
-      <p className="source-manager-copy">Positive sync moves a source later on the master timeline. Select an angle to review its transcript and preview.</p>
+      <p className="source-manager-copy">Select an angle to preview it. Sync (s) shifts a source later on the master clock.</p>
       <div className="source-manager-list">
         {sources.map((source) => (
           <article key={source.id} className={`source-card ${source.id === activeSourceId ? "active" : ""}`}>
@@ -59,7 +60,7 @@ export function SourceManager() {
           </article>
         ))}
       </div>
-      {active && <button type="button" className="program-cut-button" onClick={useCurrentAngle} disabled={programEnd - playbackTime < 0.04}><Scissors size={14} /> Cut to {active.role} from {playbackTime.toFixed(1)}s</button>}
+      {active && <button type="button" className="program-cut-button" onClick={useCurrentAngle} disabled={programEnd - playbackTime < 0.04}><Scissors size={14} /> Cut to {active.role} from {formatTime(playbackTime)}</button>}
       {sourceUploadRequest && <p className="source-agent-request"><SlidersHorizontal size={14} /> Agent requested {sourceUploadRequest.roles.join(", ")}; use + to choose the local files.</p>}
       <input ref={input} className="sr-only" type="file" multiple accept="audio/*,video/*" onChange={(event) => {
         const files = Array.from(event.currentTarget.files ?? []);
