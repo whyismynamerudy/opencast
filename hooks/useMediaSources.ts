@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { uploadMediaSource } from "@/lib/mediaUpload";
+import { queueMediaWorkerSource } from "@/lib/mediaWorkerClient";
 import type { SourceRole } from "@/lib/multicam";
 import { useEditorStore } from "@/lib/store";
 
@@ -52,10 +53,13 @@ export function useMediaSources() {
             useEditorStore.getState().updateMediaSource(sourceId, {
               status: current?.status === "ready" ? "ready" : "uploaded",
               uploadProgress: 1,
+              processingProgress: 0,
+              processingStage: null,
               storageUrl: stored.url,
               storagePath: stored.pathname,
             });
             useEditorStore.getState().addActivity("media_upload", `Stored ${file.name} directly in project media storage.`, "success");
+            await queueMediaWorkerSource(sourceId);
           } catch (reason) {
             const message = reason instanceof Error ? reason.message : "Cloud storage upload failed.";
             useEditorStore.getState().updateMediaSource(sourceId, { status: "local", error: message });

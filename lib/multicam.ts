@@ -26,6 +26,9 @@ export type MediaSource = {
   syncOffset: number;
   status: SourceUploadStatus;
   uploadProgress: number;
+  /** Worker-side progress after the original has reached project storage. */
+  processingProgress?: number;
+  processingStage?: string | null;
   file: File | null;
   localUrl: string | null;
   storageUrl: string | null;

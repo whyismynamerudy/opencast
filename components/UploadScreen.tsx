@@ -1,14 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { CloudUpload, FileText, Film, LoaderCircle, Mic2, Upload, X } from "lucide-react";
+import { CheckCircle2, CloudUpload, FileText, Film, LoaderCircle, Upload } from "lucide-react";
 import { useMediaSources } from "@/hooks/useMediaSources";
 import { useMediaWorker } from "@/hooks/useMediaWorker";
+import { sourceProgress, sourceStatusLabel } from "@/lib/mediaStatus";
 import { parseTranscriptFile } from "@/lib/parseTranscript";
 import { useEditorStore } from "@/lib/store";
-import { useTranscriber } from "@/hooks/useTranscriber";
-
-const DIRECT_TRANSCRIPT_MAX_BYTES = 24 * 1024 * 1024;
 
 const SAMPLE_TRANSCRIPT = `1
 00:00:00,000 --> 00:00:03,400
@@ -36,8 +34,7 @@ export function UploadScreen() {
   const clearSourceUploadRequest = useEditorStore((state) => state.clearSourceUploadRequest);
   const transcription = useEditorStore((state) => state.transcription);
   const { importFiles, importing } = useMediaSources();
-  const { transcribe, cancel, running } = useTranscriber();
-  const { processLargeSource, runningSourceIds } = useMediaWorker();
+  const { processLargeSource } = useMediaWorker();
   const [busy, setBusy] = useState<"transcript" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,23 +43,17 @@ export function UploadScreen() {
     try {
       const imported = await importFiles(files, sourceUploadRequest?.roles);
       clearSourceUploadRequest();
-      if (imported.length === 1 && imported[0].file.size <= DIRECT_TRANSCRIPT_MAX_BYTES) {
-        void transcribe(imported[0].file, imported[0].sourceId);
-      } else {
-        for (const item of imported.filter(({ file }) => file.size > DIRECT_TRANSCRIPT_MAX_BYTES)) {
-          const source = useEditorStore.getState().mediaSources.find((candidate) => candidate.id === item.sourceId);
-          if (source?.storageUrl) {
-            useEditorStore.getState().updateMediaSource(item.sourceId, {
-              status: "needs-worker",
-              error: "Large-source transcription is handled by the media worker after direct upload.",
-            });
-          }
-        }
-      }
+      if (!imported.length) throw new Error("Choose at least one audio or video recording.");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Media import failed.");
     }
   };
+
+  const activeSources = sources.filter((source) => source.status === "uploading" || source.status === "uploaded" || source.status === "transcribing");
+  const allSourcesReady = sources.length > 0 && sources.every((source) => source.status === "ready");
+  const overallProgress = sources.length
+    ? Math.round(sources.reduce((total, source) => total + sourceProgress(source), 0) / sources.length * 100)
+    : 0;
 
   const loadTranscriptFile = async (file: File) => {
     setBusy("transcript");
@@ -97,13 +88,13 @@ export function UploadScreen() {
         <div className="brand-lockup"><span className="brand-mark">◒</span><span>OpenCast</span></div>
         <p className="eyebrow">MULTICAM · WEBMCP-NATIVE POST-PRODUCTION</p>
         <h1>Build the edit from every angle.</h1>
-        <p className="welcome-copy">Add the host, guest, screen share, and B-roll together. OpenCast keeps each file on its own clock, maps transcripts to a shared master timeline, and lets a person or agent choose the program angle without guessing through the interface.</p>
+        <p className="welcome-copy">Add the host, guest, screen share, and B-roll together. OpenCast stores the originals, prepares clean audio, transcribes each angle, and opens the editor as soon as the first transcript is ready.</p>
 
         <div className="upload-grid">
           <button className="upload-card" onClick={() => mediaInput.current?.click()} type="button" disabled={importing}>
             {importing ? <LoaderCircle className="spin" /> : <CloudUpload />}
-            <span>{sources.length ? "Add media sources" : "Import media sources"}</span>
-            <small>Choose multiple MP4, WebM, MP3, M4A, WAV…</small>
+            <span>{sources.length ? "Add more recordings" : "Choose podcast recordings"}</span>
+            <small>Select one file or every angle at once. Processing starts automatically.</small>
           </button>
           <button className="upload-card" onClick={() => transcriptInput.current?.click()} type="button" disabled={busy !== null}>
             {busy === "transcript" ? <LoaderCircle className="spin" /> : <FileText />}
@@ -115,30 +106,43 @@ export function UploadScreen() {
         {sourceUploadRequest && <p className="upload-request"><Film size={15} /> An agent prepared slots for {sourceUploadRequest.roles.join(", ")}. Choose those local files to attach them to this live project.</p>}
 
         {sources.length > 0 && (
-          <div className="source-ingest-list">
-            {sources.map((source) => (
-              <div className="source-ingest-row" key={source.id}>
-                <Film size={15} />
-                <span><strong>{source.name}</strong><small>{source.role} · {Math.round(source.duration)}s · {source.status === "uploading" ? `${Math.round(source.uploadProgress * 100)}% uploaded` : source.status.replace("-", " ")}</small></span>
-                {source.file && source.file.size <= DIRECT_TRANSCRIPT_MAX_BYTES && source.status !== "ready" && !running && <button type="button" onClick={() => void transcribe(source.file!, source.id)}>Transcribe</button>}
-                {source.status === "needs-worker" && <button type="button" onClick={() => void processLargeSource(source.id)} disabled={runningSourceIds.includes(source.id)}>Process</button>}
+          <section className="processing-queue" aria-live="polite">
+            <header>
+              <div>
+                <p className="panel-kicker">PREPARING YOUR EDIT</p>
+                <h2>{allSourcesReady ? "Your recordings are ready." : "We’re building your editing workspace."}</h2>
               </div>
-            ))}
-          </div>
+              {allSourcesReady ? <CheckCircle2 size={20} /> : <LoaderCircle className="spin" size={20} />}
+            </header>
+            <p>{allSourcesReady ? "OpenCast has a time-coded transcript and speaker labels ready for editing." : activeSources.length > 1 ? "Each recording uploads and transcribes in the background. You can start editing as soon as the first angle is ready." : "This happens automatically — keep this tab open while we prepare the transcript."}</p>
+            <div className="processing-progress" role="progressbar" aria-label="Overall media processing progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overallProgress}><span style={{ width: `${overallProgress}%` }} /></div>
+            <div className="source-ingest-list">
+              {sources.map((source) => (
+                <div className={`source-ingest-row ${source.status}`} key={source.id}>
+                  <Film size={15} />
+                  <span>
+                    <strong>{source.name}</strong>
+                    <small>{source.role} · {Math.round(source.duration)}s · {sourceStatusLabel(source)}</small>
+                    <i className="source-row-progress" aria-hidden="true"><b style={{ width: `${Math.round(sourceProgress(source) * 100)}%` }} /></i>
+                  </span>
+                  {source.status === "error" && source.storageUrl && <button type="button" onClick={() => void processLargeSource(source.id)}>Retry</button>}
+                </div>
+              ))}
+            </div>
+          </section>
         )}
 
         <div className="welcome-actions">
           <button className="text-button" type="button" onClick={loadSample} disabled={busy !== null || importing}>Try the sample transcript <Upload size={14} /></button>
-          <span>Large originals upload directly to project storage · small local clips can transcribe now</span>
+          <span>Large originals upload directly to project storage · all media is transcribed by the media worker</span>
         </div>
-        {(running || transcription.stage === "error" || transcription.stage === "extracting") && (
+        {transcription.stage === "error" && (
           <div className={`transcription-progress ${transcription.stage === "error" ? "error" : ""}`}>
-            <div className="transcription-progress-icon">{running ? <LoaderCircle className="spin" size={18} /> : <Mic2 size={18} />}</div>
+            <div className="transcription-progress-icon"><CloudUpload size={18} /></div>
             <div>
-              <strong>{transcription.stage === "error" ? "Cloud transcription needs attention" : transcription.message}</strong>
-              <span>{transcription.stage === "error" ? transcription.error : `${Math.round(transcription.progress * 100)}% · OpenAI diarization + word timing`}</span>
+              <strong>Transcription needs attention</strong>
+              <span>{transcription.error}</span>
             </div>
-            {running ? <button type="button" className="progress-action" onClick={cancel} aria-label="Cancel transcription"><X size={15} /></button> : null}
           </div>
         )}
         {error && <p className="form-error">{error}</p>}

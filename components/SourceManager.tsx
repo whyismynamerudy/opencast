@@ -4,11 +4,9 @@ import { useRef } from "react";
 import { Camera, Check, CloudUpload, Film, Plus, Scissors, SlidersHorizontal } from "lucide-react";
 import { useMediaSources } from "@/hooks/useMediaSources";
 import { useMediaWorker } from "@/hooks/useMediaWorker";
+import { sourceProgress, sourceStatusLabel } from "@/lib/mediaStatus";
 import { programSegmentAt, SOURCE_ROLES, type SourceRole } from "@/lib/multicam";
 import { useEditorStore } from "@/lib/store";
-import { useTranscriber } from "@/hooks/useTranscriber";
-
-const DIRECT_TRANSCRIPT_MAX_BYTES = 24 * 1024 * 1024;
 
 export function SourceManager() {
   const input = useRef<HTMLInputElement>(null);
@@ -25,8 +23,7 @@ export function SourceManager() {
   const applyProgramCut = useEditorStore((state) => state.applyProgramCut);
   const addActivity = useEditorStore((state) => state.addActivity);
   const { importFiles, importing } = useMediaSources();
-  const { transcribe, running } = useTranscriber();
-  const { processLargeSource, runningSourceIds } = useMediaWorker();
+  const { processLargeSource } = useMediaWorker();
 
   const active = sources.find((source) => source.id === activeSourceId);
   const currentSegment = programSegmentAt(segments, playbackTime);
@@ -55,10 +52,10 @@ export function SourceManager() {
               <label>Role<select value={source.role} onChange={(event) => setSourceRole(source.id, event.target.value as SourceRole)}>{SOURCE_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</select></label>
               <label>Sync (s)<input aria-label={`${source.name} sync offset`} type="number" step="0.01" value={source.syncOffset} onChange={(event) => setSourceSyncOffset(source.id, Number(event.target.value))} /></label>
             </div>
-            <footer><span><CloudUpload size={12} /> {source.status === "uploading" ? `${Math.round(source.uploadProgress * 100)}%` : source.status.replace("-", " ")}</span>
-              {source.file && source.file.size <= DIRECT_TRANSCRIPT_MAX_BYTES && source.status !== "ready" && !running && <button type="button" onClick={() => void transcribe(source.file!, source.id)}>Transcribe</button>}
-              {source.status === "needs-worker" && <button type="button" onClick={() => void processLargeSource(source.id)} disabled={runningSourceIds.includes(source.id)}>Process</button>}
+            <footer><span><CloudUpload size={12} /> {sourceStatusLabel(source)}</span>
+              {source.status === "error" && source.storageUrl && <button type="button" onClick={() => void processLargeSource(source.id)}>Retry</button>}
             </footer>
+            {(source.status === "uploading" || source.status === "uploaded" || source.status === "transcribing") && <div className="source-card-progress" aria-hidden="true"><span style={{ width: `${Math.round(sourceProgress(source) * 100)}%` }} /></div>}
           </article>
         ))}
       </div>

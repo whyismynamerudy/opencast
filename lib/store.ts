@@ -210,6 +210,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         syncOffset: 0,
         status: "local",
         uploadProgress: 0,
+        processingProgress: 0,
+        processingStage: null,
         file,
         localUrl: url,
         storageUrl: null,
@@ -265,6 +267,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         syncOffset: 0,
         status: "local",
         uploadProgress: 0,
+        processingProgress: 0,
+        processingStage: null,
         file: input.file,
         localUrl: input.localUrl,
         storageUrl: null,
@@ -392,7 +396,13 @@ export const useEditorStore = create<EditorState>((set, get) => {
       }, sourceId, source.syncOffset));
       const remaining = state.words.filter((word) => word.sourceId !== sourceId);
       const nextWords = [...remaining, ...sourceWords].sort((a, b) => a.start - b.start);
-      const nextSources = state.mediaSources.map((item) => item.id === sourceId ? { ...item, status: "ready" as const, error: null } : item);
+      const nextSources = state.mediaSources.map((item) => item.id === sourceId ? {
+        ...item,
+        status: "ready" as const,
+        processingProgress: 1,
+        processingStage: "complete",
+        error: null,
+      } : item);
       const nextDuration = projectDuration(nextSources, nextWords);
       set({
         words: nextWords,

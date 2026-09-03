@@ -12,6 +12,7 @@
     "test:core": "tsx tests/core.test.ts",
     "test:webmcp": "tsx tests/webmcp.test.ts",
     "test:pipeline": "tsx tests/pipeline.test.ts",
+    "test:media-status": "tsx tests/mediaStatus.test.ts",
     "test:multicam": "tsx tests/multicam.test.ts",
     "test:worker-ticket": "tsx tests/workerTicket.test.ts"
   },

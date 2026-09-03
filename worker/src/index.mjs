@@ -13,6 +13,8 @@ const run = promisify(execFile);
 const port = Number(process.env.PORT || 8080);
 const workRoot = process.env.OPENCAST_WORK_DIR || tmpdir();
 const jobs = new Map();
+const pendingJobs = [];
+let processingQueue = false;
 const OPENAI_TRANSCRIPT_URL = "https://api.openai.com/v1/audio/transcriptions";
 
 function respond(response, status, body) {
@@ -76,8 +78,8 @@ function readJobTicket(value) {
 
 function jobView(job) {
   return job.status === "complete"
-    ? { id: job.id, status: job.status, progress: 1, result: job.result }
-    : { id: job.id, status: job.status, progress: job.progress, ...(job.error ? { error: job.error } : {}) };
+    ? { id: job.id, status: job.status, stage: job.stage, progress: 1, result: job.result }
+    : { id: job.id, status: job.status, stage: job.stage, progress: job.progress, ...(job.error ? { error: job.error } : {}) };
 }
 
 async function downloadSource(url, path) {
@@ -158,18 +160,23 @@ async function processJob(job) {
   let workDirectory;
   try {
     job.status = "processing";
+    job.stage = "downloading";
     job.progress = 0.03;
+    console.info(`[job ${job.id}] Downloading ${job.filename}`);
     await mkdir(workRoot, { recursive: true });
     workDirectory = await mkdtemp(join(workRoot, "opencast-"));
     const extension = extname(job.filename || new URL(job.sourceUrl).pathname) || ".media";
     const sourcePath = join(workDirectory, `source${extension.replace(/[^.a-zA-Z0-9]/g, "")}`);
     await downloadSource(job.sourceUrl, sourcePath);
+    job.stage = "extracting";
     job.progress = 0.15;
     const segments = await makeAudioSegments(sourcePath, workDirectory);
     if (!segments.length) throw new Error("No audio track was found in this media source.");
     const segmentSeconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 600), 1_800));
     const chunks = [];
     for (let index = 0; index < segments.length; index++) {
+      job.stage = `transcribing ${index + 1} of ${segments.length}`;
+      job.progress = 0.15 + (index / segments.length) * 0.8;
       const [diarized, timed] = await Promise.all([
         transcribeRequest(segments[index], "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]]),
         transcribeRequest(segments[index], "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]]),
@@ -177,17 +184,41 @@ async function processJob(job) {
       chunks.push({ diarized, timed });
       job.progress = 0.15 + ((index + 1) / segments.length) * 0.8;
     }
+    job.stage = "finalizing";
+    job.progress = 0.97;
     const result = normalizeChunks(chunks, segmentSeconds);
     if (!result.words.length) throw new Error("OpenAI did not return timed words for this source.");
     job.status = "complete";
+    job.stage = "complete";
     job.progress = 1;
     job.result = result;
+    console.info(`[job ${job.id}] Completed ${result.words.length} words from ${job.filename}`);
   } catch (error) {
     job.status = "error";
+    job.stage = "error";
     job.error = error instanceof Error ? error.message : "Media worker failed.";
+    console.error(`[job ${job.id}] Failed: ${job.error}`);
   } finally {
     if (workDirectory) await rm(workDirectory, { recursive: true, force: true });
   }
+}
+
+async function processQueue() {
+  if (processingQueue) return;
+  processingQueue = true;
+  try {
+    while (pendingJobs.length) {
+      const job = pendingJobs.shift();
+      if (job) await processJob(job);
+    }
+  } finally {
+    processingQueue = false;
+  }
+}
+
+function enqueueJob(job) {
+  pendingJobs.push(job);
+  void processQueue();
 }
 
 const server = createServer(async (request, response) => {
@@ -198,9 +229,9 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readJson(request);
       const claim = readJobTicket(body.ticket);
-      const job = { id: crypto.randomUUID(), sourceUrl: claim.sourceUrl, filename: claim.filename, status: "queued", progress: 0, error: null, result: null };
+      const job = { id: crypto.randomUUID(), sourceUrl: claim.sourceUrl, filename: claim.filename, status: "queued", stage: "queued", progress: 0, error: null, result: null };
       jobs.set(job.id, job);
-      void processJob(job);
+      enqueueJob(job);
       setTimeout(() => jobs.delete(job.id), 60 * 60 * 1000).unref();
       return respond(response, 202, { id: job.id, status: job.status });
     } catch (error) {

@@ -42,7 +42,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. **Try the sample transcript** exercises the editor without media, storage, or an API key. Small media files can use the fallback transcription route when `OPENAI_API_KEY` is present.
+Open `http://localhost:3000`. **Try the sample transcript** exercises the editor without media, storage, or an API key. To process local media, configure Blob storage and the worker as described below; the OpenAI key stays on the worker, never in the browser or Next.js app.
 
 ## Deploying long HD episodes
 
@@ -60,10 +60,6 @@ NEXT_PUBLIC_OPENCAST_MEDIA_WORKER_URL=https://your-opencast-worker.example.com
 
 # Shared only with the worker. The app uses it to issue short-lived job tickets.
 OPENCAST_WORKER_SIGNING_SECRET=
-
-# Only used by the existing small-file fallback endpoint.
-OPENAI_API_KEY=
-OPENCAST_MAX_UPLOAD_MB=25
 
 # Optional: WebMCP origin trial token for your deployed origin.
 WEBMCP_ORIGIN_TRIAL_TOKEN=
@@ -94,7 +90,7 @@ This hackathon reference uploads originals with **public, unguessable Blob URLs*
 
 1. Choose every local source together. The first two default to host and guest; change roles in the Sources panel as needed.
 2. Set the manual sync offset if the recordings did not begin together. Positive means that source begins later on the master timeline.
-3. Small clips transcribe immediately. For a long recording, use **Process** once direct storage completes; the browser polls the media worker and adds the source transcript when it finishes.
+3. Every source starts processing automatically once its direct upload completes. OpenCast shows upload, audio-preparation, and transcription progress for each angle; the editor opens as soon as the first transcript is ready while the remaining angles continue in the background.
 4. Select an angle and use **Cut to …** at the playhead to choose the program camera for the current program segment.
 
 ## WebMCP workflow
@@ -122,6 +118,7 @@ For every audio segment, the worker makes two requests: `gpt-4o-transcribe-diari
 npm run lint
 npm run test:core
 npm run test:pipeline
+npm run test:media-status
 npm run test:multicam
 npm run test:worker-ticket
 npm run test:webmcp
@@ -134,7 +131,7 @@ The tests cover the original edit engine and media helpers, master/source timest
 
 ## Development notes
 
-- The existing `/api/transcribe` route remains a deliberately capped, small-file convenience path. It is not the large-podcast architecture.
+- All media sources use the Fly media worker after direct Blob upload, including short clips. This keeps OpenAI credentials off Vercel and gives one consistent progress and retry path for podcast-length recordings.
 - The browser keeps local object URLs only for the active session/preview. The original durable copy lives in Blob storage, and neither the Next.js app nor the browser needs to hold a full HD video in memory.
 - Speaker identities from independently processed chunks are provisional. Production-quality cross-chunk speaker identity resolution and server-side multicam rendering are sensible next worker upgrades.
 
