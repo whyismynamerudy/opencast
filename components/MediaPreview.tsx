@@ -49,7 +49,15 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   }, [activeSource?.syncOffset, cuts, isPlaying, setPlaybackTime]);
 
   if (!mediaUrl) {
-    return <section className="preview empty-preview"><span className="preview-orb">◒</span><p>Import matching media to preview the edit.</p><small>The transcript editor is already ready.</small></section>;
+    return (
+      <section className="preview empty-preview">
+        <div className="empty-preview-content">
+          <span className="preview-orb">◒</span>
+          <p>Import matching media to preview the edit.</p>
+          <small>The transcript editor is already ready.</small>
+        </div>
+      </section>
+    );
   }
 
   const shared = {
@@ -61,13 +69,15 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
 
   return (
     <section className={`preview ${mediaKind === "audio" ? "audio-preview" : ""}`}>
-      {mediaKind === "video" ? <video {...shared} playsInline /> : <audio {...shared} />}
-      {mediaKind === "audio" && <div className="audio-art"><span>OPENCAST</span><strong>{mediaName}</strong><i /></div>}
+      <div className="media-stage">
+        {mediaKind === "video" ? <video {...shared} playsInline /> : <audio {...shared} />}
+        {mediaKind === "audio" && <div className="audio-art"><span>OPENCAST</span><strong>{mediaName}</strong><i /></div>}
+      </div>
       <div className="preview-controls">
+        <span className="preview-time">{formatTime(time)}</span>
         <button type="button" className="round-control" aria-label={isPlaying ? "Pause" : "Play"} onClick={() => setIsPlaying(!isPlaying)}>
-          {isPlaying ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}
+          {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
         </button>
-        <span>{formatTime(time)}</span>
         <span className="muted">{activeSourceId ? "angle preview · master time" : "edited playback"}</span>
       </div>
     </section>

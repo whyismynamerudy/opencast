@@ -26,7 +26,7 @@ export function Timeline({ cuts, clips, words }: { cuts: TimeRange[]; clips: Cli
   return (
     <section className="timeline-panel">
       <div className="timeline-heading">
-        <div><p className="panel-kicker">ORIGINAL TIMELINE</p><h2>Every edit has a visible cause.</h2></div>
+        <div><p className="panel-kicker">TIMELINE</p><h2>{formatTime(playbackTime)} <span>/ {formatTime(duration)}</span></h2></div>
         <div className="timeline-metrics"><span>{formatTime(editedSeconds)} edited</span><span>{cuts.length} cuts</span><span>{clips.length} clips</span></div>
       </div>
       <div className="ruler"><span>0:00</span><span>{formatTime(duration / 2)}</span><span>{formatTime(duration)}</span></div>

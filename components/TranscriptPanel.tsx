@@ -1,6 +1,6 @@
 "use client";
 
-import { RotateCcw, Scissors, Search, WandSparkles } from "lucide-react";
+import { RotateCcw, Scissors, WandSparkles } from "lucide-react";
 import { isWordCut } from "@/lib/edits";
 import { useEditorStore } from "@/lib/store";
 import type { TimeRange } from "@/lib/types";
@@ -29,14 +29,13 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   return (
     <section className="transcript-panel">
       <header className="transcript-header">
-        <div><p className="panel-kicker">{activeSourceName ? `TRANSCRIPT · ${activeSourceName}` : "TRANSCRIPT"}</p><h2>Edit the words. The recording follows.</h2></div>
-        <button type="button" className="icon-button" aria-label="Search transcript"><Search size={17} /></button>
+        <div><p className="panel-kicker">{activeSourceName ? `TRANSCRIPT · ${activeSourceName}` : "TRANSCRIPT"}</p><h2>{activeSourceName || "Edit the words. The recording follows."}</h2></div>
+        <div className="quick-actions" aria-label="Transcript actions">
+          <button type="button" onClick={() => removeFillers()}><WandSparkles size={14} /> Remove fillers</button>
+          <button type="button" onClick={() => removeSilences()}><Scissors size={14} /> Remove silence</button>
+          <button type="button" onClick={action} disabled={!selected.length}>{selectedDeleted === selected.length ? <RotateCcw size={14} /> : <Scissors size={14} />}{selectedDeleted === selected.length ? "Restore" : "Cut"}</button>
+        </div>
       </header>
-      <div className="quick-actions">
-        <button type="button" onClick={() => removeFillers()}><WandSparkles size={14} /> Remove fillers</button>
-        <button type="button" onClick={() => removeSilences()}><Scissors size={14} /> Remove silence</button>
-        <button type="button" onClick={action} disabled={!selected.length}>{selectedDeleted === selected.length ? <RotateCcw size={14} /> : <Scissors size={14} />}{selectedDeleted === selected.length ? "Restore" : "Cut"} selection</button>
-      </div>
       <div className="transcript-scroll">
         {sourceWords.map((word, index) => {
           const speaker = speakers.find((item) => item.id === word.speaker);
