@@ -56,6 +56,18 @@ function failWorkerSource(sourceId: string, reason: unknown): QueueResult {
   return { ok: false, error: message };
 }
 
+async function issueWorkerTicket(source: { storageUrl: string | null; id: string; name: string }) {
+  if (!source.storageUrl) throw new Error("Wait for direct media storage to finish before transcription starts.");
+  const ticketResponse = await fetch("/api/media/worker-ticket", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceUrl: source.storageUrl, sourceId: source.id, filename: source.name }),
+  });
+  const ticketPayload = await ticketResponse.json() as { ticket?: string; error?: string };
+  if (!ticketResponse.ok || !ticketPayload.ticket) throw new Error(ticketPayload.error || "Could not authorize the media worker job.");
+  return ticketPayload.ticket;
+}
+
 function pollWorkerJob(baseUrl: string, sourceId: string, jobId: string) {
   if (activePolls.has(jobId) || typeof window === "undefined") return;
   activePolls.add(jobId);
@@ -99,18 +111,30 @@ export async function queueMediaWorkerSource(sourceId: string): Promise<QueueRes
 
   try {
     setWorkerProgress(sourceId, 0.01, "authorizing");
-    const ticketResponse = await fetch("/api/media/worker-ticket", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sourceUrl: source.storageUrl, sourceId, filename: source.name }),
-    });
-    const ticketPayload = await ticketResponse.json() as { ticket?: string; error?: string };
-    if (!ticketResponse.ok || !ticketPayload.ticket) throw new Error(ticketPayload.error || "Could not authorize the media worker job.");
+    const ticket = await issueWorkerTicket(source);
+
+    // A durable failed job has its media and completed chunks on Fly already.
+    // Legacy jobs return 404 and safely start a fresh job instead.
+    if (source.status === "error" && source.ingestJobId) {
+      const resumeResponse = await fetch(`${baseUrl}/jobs/${encodeURIComponent(source.ingestJobId)}/retry`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticket }),
+      });
+      const resumePayload = await resumeResponse.json() as { id?: string; error?: string };
+      if (resumeResponse.ok && resumePayload.id) {
+        editor.updateMediaSource(sourceId, { status: "transcribing", processingProgress: 0.02, processingStage: "resuming", error: null });
+        editor.addActivity("media_worker", `Resuming transcription for ${source.name}.`, "success");
+        pollWorkerJob(baseUrl, sourceId, resumePayload.id);
+        return { ok: true, jobId: resumePayload.id };
+      }
+      if (resumeResponse.status !== 404) throw new Error(resumePayload.error || "Could not resume the media worker job.");
+    }
 
     const response = await fetch(`${baseUrl}/jobs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ticket: ticketPayload.ticket }),
+      body: JSON.stringify({ ticket }),
     });
     const payload = await response.json() as { id?: string; error?: string };
     if (!response.ok || !payload.id) throw new Error(payload.error || "Media worker did not create a job.");

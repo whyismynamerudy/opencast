@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, extname } from "node:path";
@@ -8,14 +8,18 @@ import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isRetryableStatus, withTransientRetries } from "./retry.mjs";
 
 const run = promisify(execFile);
 const port = Number(process.env.PORT || 8080);
 const workRoot = process.env.OPENCAST_WORK_DIR || tmpdir();
+const jobRoot = join(workRoot, "opencast-jobs");
 const jobs = new Map();
 const pendingJobs = [];
 let processingQueue = false;
 const OPENAI_TRANSCRIPT_URL = "https://api.openai.com/v1/audio/transcriptions";
+const maxTranscriptionAttempts = Math.max(1, Math.min(Number(process.env.OPENCAST_TRANSCRIPTION_MAX_ATTEMPTS || 4), 8));
+const jobRetentionMs = Math.max(60 * 60 * 1000, Number(process.env.OPENCAST_JOB_RETENTION_MS || 24 * 60 * 60 * 1000));
 
 function respond(response, status, body) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -82,40 +86,177 @@ function jobView(job) {
     : { id: job.id, status: job.status, stage: job.stage, progress: job.progress, ...(job.error ? { error: job.error } : {}) };
 }
 
-async function downloadSource(url, path) {
-  const response = await fetch(url);
-  if (!response.ok || !response.body) throw new Error(`Could not download source media (${response.status}).`);
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(path));
+function describeError(error) {
+  const message = error instanceof Error ? error.message : String(error || "Unknown error");
+  const cause = error && typeof error === "object" && "cause" in error ? error.cause : null;
+  const causeMessage = cause instanceof Error ? cause.message : cause && typeof cause === "object" && "code" in cause ? String(cause.code) : "";
+  return causeMessage && causeMessage !== message ? `${message} (${causeMessage})` : message;
+}
+
+function requestError(message, { retryable, retryAfterMs } = {}) {
+  return Object.assign(new Error(message), { retryable: Boolean(retryable), retryAfterMs });
+}
+
+function retryAfterMs(value) {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+}
+
+async function fileExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function readJsonFile(path) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function writeJsonAtomic(path, value) {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, JSON.stringify(value));
+  await rename(temporary, path);
+}
+
+function jobDirectory(job) {
+  return join(jobRoot, job.id);
+}
+
+function jobMetadata(job) {
+  return {
+    id: job.id,
+    sourceUrl: job.sourceUrl,
+    sourceId: job.sourceId,
+    filename: job.filename,
+    status: job.status,
+    stage: job.stage,
+    progress: job.progress,
+    error: job.error,
+    result: job.result,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+async function persistJob(job) {
+  job.updatedAt = Date.now();
+  const directory = jobDirectory(job);
+  await mkdir(directory, { recursive: true });
+  await writeJsonAtomic(join(directory, "job.json"), jobMetadata(job));
+}
+
+async function downloadSource(url, path, jobId) {
+  const partialPath = `${path}.part`;
+  const maxDownloadAttempts = 4;
+  await withTransientRetries({
+    maxAttempts: maxDownloadAttempts,
+    attempt: async () => {
+      await rm(partialPath, { force: true });
+      let response;
+      try {
+        response = await fetch(url);
+      } catch (error) {
+        throw requestError(`Source download did not receive a response: ${describeError(error)}`, { retryable: true });
+      }
+      if (!response.ok || !response.body) {
+        throw requestError(`Could not download source media (${response.status}).`, {
+          retryable: isRetryableStatus(response.status),
+          retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
+        });
+      }
+      try {
+        await pipeline(Readable.fromWeb(response.body), createWriteStream(partialPath));
+      } catch (error) {
+        throw requestError(`Source download interrupted: ${describeError(error)}`, { retryable: true });
+      }
+    },
+    onRetry: ({ attempt, nextAttempt, delayMs, error }) => console.warn(`[job ${jobId}] Retrying source download after attempt ${attempt}/${maxDownloadAttempts}: ${describeError(error)}. Next attempt ${nextAttempt} in ${delayMs}ms.`),
+  });
+  await rename(partialPath, path);
 }
 
 async function makeAudioSegments(sourcePath, outputDirectory) {
-  const seconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 600), 1_800));
+  const seconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 300), 1_800));
+  const manifestPath = join(outputDirectory, "segments.json");
+  const existingManifest = await readJsonFile(manifestPath);
+  if (Array.isArray(existingManifest?.files) && existingManifest.files.length) {
+    const paths = existingManifest.files.map((name) => join(outputDirectory, name));
+    if ((await Promise.all(paths.map((path) => fileExists(path)))).every(Boolean)) return paths;
+  }
+  const existing = await readdir(outputDirectory);
+  await Promise.all(existing.filter((name) => /^audio-\d+\.ogg$/.test(name)).map((name) => rm(join(outputDirectory, name), { force: true })));
   const output = join(outputDirectory, "audio-%03d.ogg");
   await run("ffmpeg", [
     "-hide_banner", "-loglevel", "error", "-y", "-i", sourcePath,
     "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", "24k",
     "-f", "segment", "-segment_time", String(seconds), "-reset_timestamps", "1", output,
   ]);
-  return (await readdir(outputDirectory)).filter((name) => /^audio-\d+\.ogg$/.test(name)).sort().map((name) => join(outputDirectory, name));
+  const files = (await readdir(outputDirectory)).filter((name) => /^audio-\d+\.ogg$/.test(name)).sort();
+  await writeJsonAtomic(manifestPath, { seconds, files });
+  return files.map((name) => join(outputDirectory, name));
 }
 
-async function transcribeRequest(filePath, model, responseFormat, extra = []) {
+async function transcribeRequest(filePath, model, responseFormat, extra = [], context = {}) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Media worker is missing OPENAI_API_KEY.");
   const buffer = await readFile(filePath);
-  const form = new FormData();
-  form.append("file", new Blob([buffer], { type: "audio/ogg" }), "audio.ogg");
-  form.append("model", model);
-  form.append("response_format", responseFormat);
-  for (const [key, value] of extra) form.append(key, value);
-  const response = await fetch(OPENAI_TRANSCRIPT_URL, {
-    method: "POST",
-    headers: { authorization: `Bearer ${apiKey}` },
-    body: form,
+  return withTransientRetries({
+    maxAttempts: maxTranscriptionAttempts,
+    attempt: async () => {
+      const form = new FormData();
+      form.append("file", new Blob([buffer], { type: "audio/ogg" }), "audio.ogg");
+      form.append("model", model);
+      form.append("response_format", responseFormat);
+      for (const [key, value] of extra) form.append(key, value);
+      let response;
+      try {
+        response = await fetch(OPENAI_TRANSCRIPT_URL, {
+          method: "POST",
+          headers: { authorization: `Bearer ${apiKey}` },
+          body: form,
+        });
+      } catch (error) {
+        throw requestError(`OpenAI ${model} request did not receive a response: ${describeError(error)}`, { retryable: true });
+      }
+      let body;
+      try {
+        body = await response.text();
+      } catch (error) {
+        throw requestError(`OpenAI ${model} response was interrupted: ${describeError(error)}`, { retryable: true });
+      }
+      let payload = null;
+      if (body) {
+        try {
+          payload = JSON.parse(body);
+        } catch (error) {
+          if (response.ok) throw requestError(`OpenAI ${model} returned an unreadable response: ${describeError(error)}`, { retryable: true });
+        }
+      }
+      if (!response.ok) {
+        throw requestError(payload?.error?.message || `OpenAI transcription failed (${response.status}).`, {
+          retryable: isRetryableStatus(response.status),
+          retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
+        });
+      }
+      return payload;
+    },
+    onRetry: async ({ attempt, nextAttempt, delayMs, error }) => {
+      await context.onRetry?.({ attempt, nextAttempt, delayMs, error, model });
+      console.warn(`[job ${context.jobId ?? "unknown"}] Retrying ${model} for chunk ${context.chunkNumber ?? "?"} after attempt ${attempt}/${maxTranscriptionAttempts}: ${describeError(error)}. Next attempt ${nextAttempt} in ${delayMs}ms.`);
+    },
   });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(payload?.error?.message || `OpenAI transcription failed (${response.status}).`);
-  return payload;
 }
 
 function normalizeChunks(chunks, segmentSeconds) {
@@ -157,49 +298,87 @@ function normalizeChunks(chunks, segmentSeconds) {
 }
 
 async function processJob(job) {
-  let workDirectory;
+  const workDirectory = jobDirectory(job);
   try {
     job.status = "processing";
-    job.stage = "downloading";
-    job.progress = 0.03;
-    console.info(`[job ${job.id}] Downloading ${job.filename}`);
-    await mkdir(workRoot, { recursive: true });
-    workDirectory = await mkdtemp(join(workRoot, "opencast-"));
+    job.error = null;
+    await mkdir(workDirectory, { recursive: true });
     const extension = extname(job.filename || new URL(job.sourceUrl).pathname) || ".media";
     const sourcePath = join(workDirectory, `source${extension.replace(/[^.a-zA-Z0-9]/g, "")}`);
-    await downloadSource(job.sourceUrl, sourcePath);
+    if (!await fileExists(sourcePath)) {
+      job.stage = "downloading";
+      job.progress = 0.03;
+      await persistJob(job);
+      console.info(`[job ${job.id}] Downloading ${job.filename}`);
+      await downloadSource(job.sourceUrl, sourcePath, job.id);
+    }
     job.stage = "extracting";
     job.progress = 0.15;
+    await persistJob(job);
     const segments = await makeAudioSegments(sourcePath, workDirectory);
     if (!segments.length) throw new Error("No audio track was found in this media source.");
-    const segmentSeconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 600), 1_800));
+    const segmentSeconds = Math.max(60, Math.min(Number(process.env.OPENCAST_SEGMENT_SECONDS || 300), 1_800));
     const chunks = [];
     for (let index = 0; index < segments.length; index++) {
-      job.stage = `transcribing ${index + 1} of ${segments.length}`;
+      const chunkNumber = index + 1;
+      const diarizedPath = join(workDirectory, `chunk-${String(index).padStart(3, "0")}-diarized.json`);
+      const timedPath = join(workDirectory, `chunk-${String(index).padStart(3, "0")}-timed.json`);
+      let diarized = await readJsonFile(diarizedPath);
+      let timed = await readJsonFile(timedPath);
+
+      job.stage = `transcribing ${chunkNumber} of ${segments.length} · speakers`;
       job.progress = 0.15 + (index / segments.length) * 0.8;
-      const [diarized, timed] = await Promise.all([
-        transcribeRequest(segments[index], "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]]),
-        transcribeRequest(segments[index], "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]]),
-      ]);
+      await persistJob(job);
+      if (!diarized) {
+        diarized = await transcribeRequest(segments[index], "gpt-4o-transcribe-diarize", "diarized_json", [["chunking_strategy", "auto"]], {
+          jobId: job.id,
+          chunkNumber,
+          onRetry: async ({ nextAttempt, delayMs }) => {
+            job.stage = `retrying ${chunkNumber} of ${segments.length} · speakers (${nextAttempt})`;
+            await persistJob(job);
+            console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying speaker labels for chunk ${chunkNumber}.`);
+          },
+        });
+        await writeJsonAtomic(diarizedPath, diarized);
+      }
+
+      job.stage = `transcribing ${chunkNumber} of ${segments.length} · word timing`;
+      job.progress = 0.15 + ((index + 0.5) / segments.length) * 0.8;
+      await persistJob(job);
+      if (!timed) {
+        timed = await transcribeRequest(segments[index], "whisper-1", "verbose_json", [["timestamp_granularities[]", "word"]], {
+          jobId: job.id,
+          chunkNumber,
+          onRetry: async ({ nextAttempt, delayMs }) => {
+            job.stage = `retrying ${chunkNumber} of ${segments.length} · word timing (${nextAttempt})`;
+            await persistJob(job);
+            console.info(`[job ${job.id}] Waiting ${delayMs}ms before retrying word timing for chunk ${chunkNumber}.`);
+          },
+        });
+        await writeJsonAtomic(timedPath, timed);
+      }
       chunks.push({ diarized, timed });
       job.progress = 0.15 + ((index + 1) / segments.length) * 0.8;
+      await persistJob(job);
     }
     job.stage = "finalizing";
     job.progress = 0.97;
+    await persistJob(job);
     const result = normalizeChunks(chunks, segmentSeconds);
     if (!result.words.length) throw new Error("OpenAI did not return timed words for this source.");
     job.status = "complete";
     job.stage = "complete";
     job.progress = 1;
     job.result = result;
+    await persistJob(job);
     console.info(`[job ${job.id}] Completed ${result.words.length} words from ${job.filename}`);
+    await clearCompletedJobArtifacts(job).catch((cleanupError) => console.warn(`[job ${job.id}] Could not clear completed media artifacts: ${describeError(cleanupError)}`));
   } catch (error) {
     job.status = "error";
     job.stage = "error";
     job.error = error instanceof Error ? error.message : "Media worker failed.";
+    await persistJob(job).catch((persistError) => console.error(`[job ${job.id}] Could not save failure checkpoint: ${describeError(persistError)}`));
     console.error(`[job ${job.id}] Failed: ${job.error}`);
-  } finally {
-    if (workDirectory) await rm(workDirectory, { recursive: true, force: true });
   }
 }
 
@@ -221,6 +400,49 @@ function enqueueJob(job) {
   void processQueue();
 }
 
+async function clearCompletedJobArtifacts(job) {
+  const directory = jobDirectory(job);
+  const entries = await readdir(directory);
+  await Promise.all(entries
+    .filter((name) => name !== "job.json")
+    .map((name) => rm(join(directory, name), { recursive: true, force: true })));
+}
+
+async function pruneExpiredJobs() {
+  const entries = await readdir(jobRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[a-zA-Z0-9-]+$/.test(entry.name)) continue;
+    const job = await readJsonFile(join(jobRoot, entry.name, "job.json"));
+    if (!job || !Number.isFinite(job.updatedAt) || Date.now() - job.updatedAt <= jobRetentionMs) continue;
+    await rm(join(jobRoot, entry.name), { recursive: true, force: true });
+    jobs.delete(entry.name);
+    console.info(`[job ${entry.name}] Pruned expired worker checkpoint.`);
+  }
+}
+
+async function restoreJobs() {
+  await mkdir(jobRoot, { recursive: true });
+  const entries = await readdir(jobRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[a-zA-Z0-9-]+$/.test(entry.name)) continue;
+    const job = await readJsonFile(join(jobRoot, entry.name, "job.json"));
+    if (!job || job.id !== entry.name || typeof job.sourceUrl !== "string" || typeof job.sourceId !== "string" || typeof job.filename !== "string") continue;
+    if (Number.isFinite(job.updatedAt) && Date.now() - job.updatedAt > jobRetentionMs) {
+      await rm(join(jobRoot, entry.name), { recursive: true, force: true });
+      continue;
+    }
+    jobs.set(job.id, job);
+    if (job.status === "queued" || job.status === "processing") {
+      job.status = "queued";
+      job.stage = "resuming";
+      job.error = null;
+      await persistJob(job);
+      enqueueJob(job);
+      console.info(`[job ${job.id}] Restored from durable checkpoint.`);
+    }
+  }
+}
+
 const server = createServer(async (request, response) => {
   setCors(response);
   if (request.method === "OPTIONS") return response.writeHead(204).end();
@@ -229,13 +451,35 @@ const server = createServer(async (request, response) => {
     try {
       const body = await readJson(request);
       const claim = readJobTicket(body.ticket);
-      const job = { id: crypto.randomUUID(), sourceUrl: claim.sourceUrl, filename: claim.filename, status: "queued", stage: "queued", progress: 0, error: null, result: null };
+      const now = Date.now();
+      const job = { id: crypto.randomUUID(), sourceUrl: claim.sourceUrl, sourceId: claim.sourceId, filename: claim.filename, status: "queued", stage: "queued", progress: 0, error: null, result: null, createdAt: now, updatedAt: now };
+      await persistJob(job);
       jobs.set(job.id, job);
       enqueueJob(job);
-      setTimeout(() => jobs.delete(job.id), 60 * 60 * 1000).unref();
       return respond(response, 202, { id: job.id, status: job.status });
     } catch (error) {
       return respond(response, 400, { error: error instanceof Error ? error.message : "Invalid job request." });
+    }
+  }
+  const retryMatch = request.method === "POST" ? request.url?.match(/^\/jobs\/([a-zA-Z0-9-]+)\/retry$/) : null;
+  if (retryMatch) {
+    try {
+      const body = await readJson(request);
+      const claim = readJobTicket(body.ticket);
+      const job = jobs.get(retryMatch[1]);
+      if (!job) return respond(response, 404, { error: "Job not found or expired." });
+      if (job.status !== "error") return respond(response, 409, { error: "Only failed jobs can be resumed." });
+      if (job.sourceUrl !== claim.sourceUrl || job.sourceId !== claim.sourceId || job.filename !== claim.filename) {
+        return respond(response, 403, { error: "This ticket cannot resume the requested job." });
+      }
+      job.status = "queued";
+      job.stage = "resuming";
+      job.error = null;
+      await persistJob(job);
+      enqueueJob(job);
+      return respond(response, 202, { id: job.id, status: job.status, resumed: true });
+    } catch (error) {
+      return respond(response, 400, { error: error instanceof Error ? error.message : "Could not resume the media worker job." });
     }
   }
   const match = request.method === "GET" ? request.url?.match(/^\/jobs\/([a-zA-Z0-9-]+)$/) : null;
@@ -246,4 +490,14 @@ const server = createServer(async (request, response) => {
   respond(response, 404, { error: "Not found." });
 });
 
-server.listen(port, () => console.log(`OpenCast media worker listening on :${port}`));
+async function start() {
+  try {
+    await restoreJobs();
+  } catch (error) {
+    console.error(`Could not restore media worker jobs: ${describeError(error)}`);
+  }
+  server.listen(port, () => console.log(`OpenCast media worker listening on :${port}`));
+  setInterval(() => void pruneExpiredJobs().catch((error) => console.warn(`Could not prune expired jobs: ${describeError(error)}`)), 60 * 60 * 1000).unref();
+}
+
+void start();
