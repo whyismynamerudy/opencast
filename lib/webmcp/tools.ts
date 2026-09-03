@@ -121,10 +121,19 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
         const baseUrl = mediaWorkerUrl();
         if (!source?.storageUrl) throw new Error("That source must finish direct storage before it can be queued.");
         if (!baseUrl) throw new Error("This OpenCast deployment has no media worker URL configured.");
-        const response = await fetch(`${baseUrl}/jobs`, {
+        const ticketResponse = await fetch("/api/media/worker-ticket", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ sourceUrl: source.storageUrl, sourceId: source.id, filename: source.name }),
+        });
+        const ticketPayload = await ticketResponse.json() as { ticket?: unknown; error?: unknown };
+        if (!ticketResponse.ok || typeof ticketPayload.ticket !== "string") {
+          throw new Error(typeof ticketPayload.error === "string" ? ticketPayload.error : "Could not authorize the media worker job.");
+        }
+        const response = await fetch(`${baseUrl}/jobs`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ticket: ticketPayload.ticket }),
         });
         const payload = await response.json() as { id?: unknown; error?: unknown };
         if (!response.ok || typeof payload.id !== "string") throw new Error(typeof payload.error === "string" ? payload.error : "Media worker did not create a job.");
