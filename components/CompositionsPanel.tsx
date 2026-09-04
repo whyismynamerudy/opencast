@@ -43,20 +43,29 @@ export function CompositionsPanel() {
           <small>{formatTime(duration)}</small>
         </button>
         {compositions.map((composition) => (
-          <div className={`composition-row ${composition.id === activeCompositionId ? "active" : ""}`} key={composition.id}>
+          // The whole row opens the composition; the title input additionally
+          // renames, and the delete button stops the open from firing.
+          <div
+            className={`composition-row ${composition.id === activeCompositionId ? "active" : ""}`}
+            key={composition.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => setActiveComposition(composition.id)}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setActiveComposition(composition.id); }}
+          >
             <Clapperboard size={14} />
             <input
               aria-label={`Rename ${composition.title}`}
               defaultValue={composition.title}
               onFocus={() => setActiveComposition(composition.id)}
-              onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+              onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Enter") event.currentTarget.blur(); }}
               onBlur={(event) => {
                 const next = event.currentTarget.value.trim();
                 if (next && next !== composition.title) renameComposition(composition.id, next);
               }}
             />
             <small>{formatTime(segmentsDuration(composition.segments))}</small>
-            <button type="button" className="composition-delete" aria-label={`Delete ${composition.title}`} onClick={() => remove(composition.id, composition.title)}><Trash2 size={13} /></button>
+            <button type="button" className="composition-delete" aria-label={`Delete ${composition.title}`} onClick={(event) => { event.stopPropagation(); remove(composition.id, composition.title); }}><Trash2 size={13} /></button>
           </div>
         ))}
       </div>

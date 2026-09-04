@@ -895,8 +895,9 @@ h1, .library-header h1, .login-card h1 {
 .composition-row input:focus { border-color: var(--rule-2); background: var(--proof-paper); }
 .composition-delete { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--muted); border: 0; background: transparent; }
 .composition-delete:hover { color: var(--accent-bright); }
-button.composition-row { cursor: pointer; grid-template-columns: auto minmax(0, 1fr) auto; }
-button.composition-row:hover { border-color: var(--rule-2); }
+.composition-row[role="button"], button.composition-row { cursor: pointer; }
+button.composition-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+.composition-row[role="button"]:hover, button.composition-row:hover { border-color: var(--rule-2); }
 
 /* the cutting desk — user-facing controls on the shared action hub */
 .hub-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 14px; }
