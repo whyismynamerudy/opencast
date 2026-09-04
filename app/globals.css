@@ -622,6 +622,9 @@ h1, .library-header h1, .login-card h1 {
   scrollbar-width: thin;
   scrollbar-color: var(--proof-rule) transparent;
   line-height: 2.05;
+  /* drag selects words through pointer events, not native text selection */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .transcript-pending {
   display: flex;

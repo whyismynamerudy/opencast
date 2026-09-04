@@ -18,6 +18,7 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   const selected = useEditorStore((state) => state.selectedWordIds);
   const time = useEditorStore((state) => state.playbackTime);
   const toggle = useEditorStore((state) => state.toggleSelectedWord);
+  const setSelectedWordIds = useEditorStore((state) => state.setSelectedWordIds);
   const setTime = useEditorStore((state) => state.setPlaybackTime);
   const deleteWords = useEditorStore((state) => state.deleteWords);
   const restoreWords = useEditorStore((state) => state.restoreWords);
@@ -71,6 +72,46 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [time]);
 
+  // Range selection: drag across words (or shift+click) to highlight a
+  // passage, exactly like selecting text — a click still toggles one word.
+  const dragState = useRef<{ anchor: number; last: number; dragged: boolean } | null>(null);
+  const lastClickIndex = useRef<number | null>(null);
+  const selectRange = (a: number, b: number) => {
+    const [from, to] = a <= b ? [a, b] : [b, a];
+    setSelectedWordIds(sourceWords.slice(from, to + 1).map((word) => word.id));
+  };
+  const wordPointerDown = (index: number, event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    dragState.current = { anchor: index, last: index, dragged: false };
+  };
+  const wordPointerEnter = (index: number, event: React.PointerEvent) => {
+    const drag = dragState.current;
+    if (!drag || !(event.buttons & 1)) return;
+    drag.last = index;
+    if (index !== drag.anchor) drag.dragged = true;
+    if (drag.dragged) selectRange(drag.anchor, index);
+  };
+  const endDrag = () => {
+    const drag = dragState.current;
+    if (drag?.dragged) {
+      const first = sourceWords[Math.min(drag.anchor, drag.last)];
+      if (first) setTime(first.start);
+    }
+    // The click event for a non-drag fires right after pointerup; clear the
+    // drag record a tick later so it can tell the two apart.
+    window.setTimeout(() => { dragState.current = null; }, 0);
+  };
+  const wordClick = (index: number, word: (typeof sourceWords)[number], event: React.MouseEvent) => {
+    if (dragState.current?.dragged) return;
+    if (event.shiftKey && lastClickIndex.current !== null) {
+      selectRange(lastClickIndex.current, index);
+    } else {
+      toggle(word.id);
+      lastClickIndex.current = index;
+    }
+    setTime(word.start);
+  };
+
   const speakerLabel = (name: string | undefined, wordSourceId: string | undefined, fallback: number): string => {
     if (!name) return `Speaker ${fallback + 1}`;
     const source = sources.find((item) => item.id === wordSourceId);
@@ -94,7 +135,7 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
           <button type="button" onClick={action} disabled={!selected.length}>{!activeComposition && selectedDeleted === selected.length ? <RotateCcw size={14} /> : <Scissors size={14} />}{!activeComposition && selectedDeleted === selected.length ? "Restore" : "Cut"}</button>
         </div>
       </header>
-      <div className="transcript-scroll" ref={scrollRef}>
+      <div className="transcript-scroll" ref={scrollRef} onPointerUp={endDrag} onPointerLeave={endDrag}>
         {activeComposition && !sourceWords.length && <div className="transcript-pending">
           <Scissors size={18} />
           <div>
@@ -121,7 +162,9 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
                 type="button"
                 data-word-id={word.id}
                 className={`transcript-word ${selected.includes(word.id) ? "selected" : ""} ${cut ? "cut" : ""} ${active ? "active" : ""}`}
-                onClick={() => { toggle(word.id); setTime(word.start); }}
+                onClick={(event) => wordClick(index, word, event)}
+                onPointerDown={(event) => wordPointerDown(index, event)}
+                onPointerEnter={(event) => wordPointerEnter(index, event)}
                 title={`${word.start.toFixed(2)}s master${word.sourceStart !== undefined ? ` · ${word.sourceStart.toFixed(2)}s source` : ""}`}
               >{word.text}</button>
             </span>
