@@ -493,10 +493,10 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
     },
     {
       name: "export",
-      description: "Render the open cut (full episode or the active composition) in this browser. webm is the composed render — captions, image layers, and background removal burned in, YouTube-ready; it plays the kept ranges in real time, so a 40s clip takes about 40s. mp4/mp3 are plain cuts; srt is the transcript.",
-      inputSchema: objectSchema({ format: { type: "string", enum: ["webm", "mp4", "mp3", "srt"] } }, ["format"]),
+      description: "Render the open cut (full episode or the active composition) in this browser. 'composed' burns in captions, image layers, and background removal — MP4 where the browser can record it, WebM otherwise, both YouTube-ready; it plays the kept ranges in real time, so a 40s clip takes about 40s. mp4/mp3 are plain cuts; srt is the transcript.",
+      inputSchema: objectSchema({ format: { type: "string", enum: ["composed", "mp4", "mp3", "srt"] } }, ["format"]),
       execute: run("export", (args) => {
-        const format = args.format === "mp3" || args.format === "srt" || args.format === "mp4" ? args.format : "webm";
+        const format = args.format === "mp3" || args.format === "srt" || args.format === "mp4" ? args.format : "composed";
         state().requestExport(format);
         return { queued: true, format, message: `Queued local ${format.toUpperCase()} export.` };
       }),

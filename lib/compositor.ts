@@ -28,11 +28,19 @@ const INK = "oklch(17% 0.024 32)";
 const BONE = "oklch(97% 0.012 78)";
 const RED = "oklch(52% 0.2 25)";
 
-function pickMimeType(): string {
-  for (const candidate of ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]) {
-    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(candidate)) return candidate;
+/** Prefer MP4 (H.264/AAC) where the browser can record it; WebM otherwise. */
+function pickContainer(): { mimeType: string; extension: "mp4" | "webm" } {
+  const candidates: Array<{ mimeType: string; extension: "mp4" | "webm" }> = [
+    { mimeType: "video/mp4;codecs=avc1.42E01E,mp4a.40.2", extension: "mp4" },
+    { mimeType: "video/mp4", extension: "mp4" },
+    { mimeType: "video/webm;codecs=vp9,opus", extension: "webm" },
+    { mimeType: "video/webm;codecs=vp8,opus", extension: "webm" },
+    { mimeType: "video/webm", extension: "webm" },
+  ];
+  for (const candidate of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(candidate.mimeType)) return candidate;
   }
-  return "";
+  return { mimeType: "", extension: "webm" };
 }
 
 async function loadOverlayImages(overlays: ImageOverlay[]): Promise<Map<string, HTMLImageElement>> {
@@ -78,7 +86,9 @@ function drawCaptions(ctx: CanvasRenderingContext2D, words: Word[], time: number
   }
 }
 
-export async function renderComposedMedia({ src, kind, keepRanges, words, captionsEnabled, overlays, backgroundRemoval, onProgress }: ComposeOptions): Promise<Blob> {
+export type ComposedRender = { blob: Blob; extension: "mp4" | "webm" };
+
+export async function renderComposedMedia({ src, kind, keepRanges, words, captionsEnabled, overlays, backgroundRemoval, onProgress }: ComposeOptions): Promise<ComposedRender> {
   const ranges = keepRanges.filter((range) => range.end - range.start > 0.05);
   if (!ranges.length) throw new Error("There is nothing to render — every range is cut.");
   const totalSeconds = ranges.reduce((total, range) => total + range.end - range.start, 0);
@@ -120,7 +130,7 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
   const canvasStream = canvas.captureStream(FRAME_RATE);
   const stream = new MediaStream([...canvasStream.getVideoTracks(), ...audioDestination.stream.getAudioTracks()]);
   const chunks: BlobPart[] = [];
-  const mimeType = pickMimeType();
+  const { mimeType, extension } = pickContainer();
   const recorder = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: 6_000_000 } : undefined);
   recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
 
@@ -141,7 +151,7 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
     if (captionsEnabled) drawCaptions(ctx, words, time, width, height);
   };
 
-  return await new Promise<Blob>((resolve, reject) => {
+  return await new Promise<ComposedRender>((resolve, reject) => {
     let rangeIndex = 0;
     let renderedBefore = 0;
     let frame = 0;
@@ -155,7 +165,7 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
       recorder.onstop = () => {
         void audioContext.close().catch(() => undefined);
         if (error) reject(error);
-        else resolve(new Blob(chunks, { type: mimeType || "video/webm" }));
+        else resolve({ blob: new Blob(chunks, { type: mimeType || "video/webm" }), extension });
       };
       if (recorder.state !== "inactive") recorder.stop();
       else recorder.onstop?.(new Event("stop") as never);

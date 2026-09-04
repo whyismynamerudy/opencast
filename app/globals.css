@@ -855,7 +855,7 @@ h1, .library-header h1, .login-card h1 {
 .overlay-row em { color: var(--accent-bright); font-family: var(--font-mono); font-size: 9px; font-style: normal; letter-spacing: 0.08em; text-transform: uppercase; }
 .overlay-row span { overflow: hidden; color: var(--ink-2); text-overflow: ellipsis; white-space: nowrap; }
 .overlay-row small { color: var(--muted); font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
-.overlay-add { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 5px; margin-top: 8px; }
+.overlay-add { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 5px; margin-top: 8px; }
 .overlay-add input { min-width: 0; padding: 7px 9px; color: var(--ink); border: var(--hair) solid var(--rule); background: var(--proof-paper); font-size: 11px; }
 .overlay-add select { padding: 4px; color: var(--ink); border: var(--hair) solid var(--rule); background: var(--proof-paper); font-family: var(--font-mono); font-size: 10px; }
 .overlay-add button { display: grid; place-items: center; width: 32px; color: var(--ink-2); border: var(--hair) solid var(--rule); background: transparent; }

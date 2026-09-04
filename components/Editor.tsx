@@ -103,9 +103,10 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
         const exportKeepRanges = composition
           ? composition.segments.map(({ start, end }) => ({ start, end }))
           : state.getKeepRanges();
-        if (exportRequest.format === "webm") {
-          // The composed render burns captions and image layers into a WebM,
-          // played from the active angle's media in real time.
+        if (exportRequest.format === "composed") {
+          // The composed render burns captions and image layers into MP4
+          // where the browser can record it (WebM otherwise), played from
+          // the active angle's media in real time.
           let src = state.mediaUrl;
           const activeSource = state.mediaSources.find((item) => item.id === state.activeSourceId) ?? state.mediaSources[0];
           if (!src && activeSource?.storagePath) {
@@ -118,7 +119,7 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
             if (ticketResponse.ok && ticketPayload.url) src = ticketPayload.url;
           }
           if (!src) throw new Error("Load the source media before rendering the composed video.");
-          const blob = await renderComposedMedia({
+          const rendered = await renderComposedMedia({
             src,
             kind: state.mediaKind,
             keepRanges: exportKeepRanges,
@@ -131,8 +132,8 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
             },
           });
           if (cancelled) return;
-          downloadBlob(blob, `${exportName}.webm`);
-          state.addActivity("export", `Rendered “${exportName}.webm” with captions and layers${state.mediaSources.length > 1 ? " from the active angle" : ""}.`, "success");
+          downloadBlob(rendered.blob, `${exportName}.${rendered.extension}`);
+          state.addActivity("export", `Rendered “${exportName}.${rendered.extension}” with captions and layers${state.mediaSources.length > 1 ? " from the active angle" : ""}.`, "success");
           state.setExportStatus("ready");
           return;
         }
@@ -182,7 +183,7 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
           <button type="button" className="toolbar-button inspector-toggle" title={inspectorOpen ? "Hide project details" : "Show project details"} aria-label={inspectorOpen ? "Hide project details" : "Show project details"} onClick={() => setInspectorOpen((open) => !open)}>
             {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
           </button>
-          <button type="button" className="export-main" onClick={() => useEditorStore.getState().requestExport("webm")}><Download size={16} /> Export</button>
+          <button type="button" className="export-main" onClick={() => useEditorStore.getState().requestExport("composed")}><Download size={16} /> Export</button>
           {onSignOut && <button type="button" className="toolbar-button sign-out-editor" title="Sign out" aria-label="Sign out" onClick={onSignOut}><LogOut size={16} /></button>}
         </div>
       </header>

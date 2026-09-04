@@ -13,7 +13,7 @@ export function ExportDialog() {
     <div className="export-box">
       <div><p className="panel-kicker">LOCAL OUTPUT</p><h3>Export your cut</h3></div>
       <div className="export-actions">
-        <button type="button" onClick={() => requestExport("webm")} disabled={status === "rendering"}><Clapperboard size={15} /> Composed</button>
+        <button type="button" onClick={() => requestExport("composed")} disabled={status === "rendering"}><Clapperboard size={15} /> Composed</button>
         {mediaKind === "video" && <button type="button" onClick={() => requestExport("mp4")} disabled={status === "rendering"}><Video size={15} /> MP4</button>}
         <button type="button" onClick={() => requestExport("mp3")} disabled={status === "rendering"}><Music2 size={15} /> MP3</button>
         <button type="button" onClick={() => requestExport("srt")} disabled={status === "rendering"}><FileText size={15} /> SRT</button>
