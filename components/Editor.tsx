@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Download, FolderOpen, LogOut, PanelRightClose, PanelRightOpen, Redo2, Undo2 } from "lucide-react";
 import { invertSegments, masterToCompositionTime, wordInSegments } from "@/lib/compositions";
+import { renderComposedMedia } from "@/lib/compositor";
 import { getClipSegments, getCutRanges, getKeepRanges } from "@/lib/edits";
 import { renderCutMedia } from "@/lib/ffmpeg";
 import { downloadBlob, wordsToSrt } from "@/lib/serializeTranscript";
@@ -99,13 +100,46 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
           state.setExportStatus("ready");
           return;
         }
+        const exportKeepRanges = composition
+          ? composition.segments.map(({ start, end }) => ({ start, end }))
+          : state.getKeepRanges();
+        if (exportRequest.format === "webm") {
+          // The composed render burns captions and image layers into a WebM,
+          // played from the active angle's media in real time.
+          let src = state.mediaUrl;
+          const activeSource = state.mediaSources.find((item) => item.id === state.activeSourceId) ?? state.mediaSources[0];
+          if (!src && activeSource?.storagePath) {
+            const ticketResponse = await fetch("/api/media/playback-ticket", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ sourceId: activeSource.id }),
+            });
+            const ticketPayload = await ticketResponse.json() as { url?: string };
+            if (ticketResponse.ok && ticketPayload.url) src = ticketPayload.url;
+          }
+          if (!src) throw new Error("Load the source media before rendering the composed video.");
+          const blob = await renderComposedMedia({
+            src,
+            kind: state.mediaKind,
+            keepRanges: exportKeepRanges,
+            words: state.words,
+            captionsEnabled: state.captionsEnabled,
+            overlays: state.overlays,
+            backgroundRemoval: state.backgroundRemoval,
+            onProgress: (fraction, note) => {
+              if (!cancelled) useEditorStore.getState().setTranscriptionProgress({ stage: "transcribing", progress: fraction, message: `Rendering · ${note}` });
+            },
+          });
+          if (cancelled) return;
+          downloadBlob(blob, `${exportName}.webm`);
+          state.addActivity("export", `Rendered “${exportName}.webm” with captions and layers${state.mediaSources.length > 1 ? " from the active angle" : ""}.`, "success");
+          state.setExportStatus("ready");
+          return;
+        }
         if (!state.mediaFile) throw new Error("Import the source media before rendering MP4 or MP3.");
         if (state.mediaSources.length > 1) {
           throw new Error("Multicam MP4/MP3 rendering belongs to the media worker. The source-aware edit plan and SRT export are ready.");
         }
-        const exportKeepRanges = composition
-          ? composition.segments.map(({ start, end }) => ({ start, end }))
-          : state.getKeepRanges();
         const blob = await renderCutMedia({
           file: state.mediaFile,
           kind: state.mediaKind,
@@ -148,7 +182,7 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
           <button type="button" className="toolbar-button inspector-toggle" title={inspectorOpen ? "Hide project details" : "Show project details"} aria-label={inspectorOpen ? "Hide project details" : "Show project details"} onClick={() => setInspectorOpen((open) => !open)}>
             {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
           </button>
-          <button type="button" className="export-main" onClick={() => useEditorStore.getState().requestExport("mp4")}><Download size={16} /> Export</button>
+          <button type="button" className="export-main" onClick={() => useEditorStore.getState().requestExport("webm")}><Download size={16} /> Export</button>
           {onSignOut && <button type="button" className="toolbar-button sign-out-editor" title="Sign out" aria-label="Sign out" onClick={onSignOut}><LogOut size={16} /></button>}
         </div>
       </header>

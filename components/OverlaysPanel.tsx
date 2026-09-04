@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Captions, CaptionsOff, ImagePlus, Trash2 } from "lucide-react";
+import { Captions, CaptionsOff, ImagePlus, Trash2, UserRound } from "lucide-react";
 import { useEditorStore } from "@/lib/store";
 import { formatTime } from "./MediaPreview";
 
@@ -10,6 +10,9 @@ export function OverlaysPanel() {
   const overlays = useEditorStore((state) => state.overlays);
   const captionsEnabled = useEditorStore((state) => state.captionsEnabled);
   const setCaptionsEnabled = useEditorStore((state) => state.setCaptionsEnabled);
+  const backgroundRemoval = useEditorStore((state) => state.backgroundRemoval);
+  const setBackgroundRemoval = useEditorStore((state) => state.setBackgroundRemoval);
+  const mediaKind = useEditorStore((state) => state.mediaKind);
   const addImageOverlay = useEditorStore((state) => state.addImageOverlay);
   const removeOverlay = useEditorStore((state) => state.removeOverlay);
   const addActivity = useEditorStore((state) => state.addActivity);
@@ -41,6 +44,13 @@ export function OverlaysPanel() {
         <span>Auto captions</span>
         <small>{captionsEnabled ? "On" : "Off"}</small>
       </button>
+      {mediaKind === "video" && (
+        <button type="button" className="captions-row" onClick={() => setBackgroundRemoval(!backgroundRemoval)}>
+          <UserRound size={14} />
+          <span>Remove background</span>
+          <small>{backgroundRemoval ? "On" : "Off"}</small>
+        </button>
+      )}
       {overlays.length > 0 && (
         <div className="overlay-list">
           {overlays.map((overlay) => (

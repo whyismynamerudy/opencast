@@ -2,24 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Captions, CaptionsOff, Pause, Play } from "lucide-react";
+import { captionWindow } from "@/lib/captions";
 import { rangeAt } from "@/lib/edits";
 import { masterToSourceTime, sourceToMasterTime } from "@/lib/multicam";
 import { useEditorStore } from "@/lib/store";
-import type { TimeRange, Word } from "@/lib/types";
-
-/** The words on screen right now: the active word with a few neighbors. */
-function captionWindow(words: Word[], time: number): { words: Word[]; activeId: string | null } {
-  const spoken = words.filter((word) => !word.deleted);
-  if (!spoken.length) return { words: [], activeId: null };
-  let index = spoken.findIndex((word) => time >= word.start && time <= word.end);
-  if (index === -1) index = spoken.findIndex((word) => word.start > time);
-  if (index === -1) return { words: [], activeId: null };
-  const active = time >= spoken[index].start ? spoken[index] : null;
-  const from = Math.max(0, index - 3);
-  const to = Math.min(spoken.length, index + 5);
-  const window = spoken.slice(from, to).filter((word) => Math.abs(word.start - spoken[index].start) < 3.5);
-  return { words: window, activeId: active?.id ?? null };
-}
+import type { TimeRange } from "@/lib/types";
 
 export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const mediaUrl = useEditorStore((state) => state.mediaUrl);
@@ -29,6 +16,9 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const overlays = useEditorStore((state) => state.overlays);
   const captionsEnabled = useEditorStore((state) => state.captionsEnabled);
   const setCaptionsEnabled = useEditorStore((state) => state.setCaptionsEnabled);
+  const backgroundRemoval = useEditorStore((state) => state.backgroundRemoval);
+  const segCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [segReady, setSegReady] = useState(false);
   const activeSourceId = useEditorStore((state) => state.activeSourceId);
   const activeSource = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId));
   const time = useEditorStore((state) => state.playbackTime);
@@ -86,6 +76,43 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
     return () => cancelAnimationFrame(frame);
   }, [activeSource?.syncOffset, cuts, isPlaying, setPlaybackTime]);
 
+  // Live background removal: the footage draws to a canvas with the person
+  // isolated, so the under layer shows through in real time.
+  useEffect(() => {
+    if (!backgroundRemoval || mediaKind !== "video") return;
+    let disposed = false;
+    let frame = 0;
+    void import("@/lib/segmentation").then(async ({ createBackgroundRemover }) => {
+      try {
+        const remover = await createBackgroundRemover();
+        if (disposed) return;
+        setSegReady(true);
+        const loop = () => {
+          if (disposed) return;
+          const video = mediaRef.current as HTMLVideoElement | null;
+          const canvas = segCanvasRef.current;
+          const context = canvas?.getContext("2d");
+          if (video && canvas && context && video.videoWidth) {
+            if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+            }
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            remover.draw(context, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height);
+          }
+          frame = requestAnimationFrame(loop);
+        };
+        frame = requestAnimationFrame(loop);
+      } catch {
+        if (!disposed) {
+          useEditorStore.getState().addActivity("set_background_removal", "The background model could not load in this browser; showing the full frame.", "error");
+        }
+      }
+    });
+    return () => { disposed = true; cancelAnimationFrame(frame); };
+  }, [backgroundRemoval, mediaKind]);
+
+  const segActive = segReady && backgroundRemoval && mediaKind === "video";
   const previewUrl = mediaUrl ?? (storedMedia && storedMedia.sourceId === activeSource?.id ? storedMedia.url : null);
 
   if (!previewUrl) {
@@ -115,7 +142,8 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
     <section className={`preview ${mediaKind === "audio" ? "audio-preview" : ""}`}>
       <div className="media-stage">
         {underImage && <img className="stage-layer stage-under" src={underImage.url} alt={underImage.name} />}
-        {mediaKind === "video" ? <video {...shared} playsInline /> : <audio {...shared} />}
+        {mediaKind === "video" ? <video {...shared} playsInline className={segActive ? "video-hidden" : ""} /> : <audio {...shared} />}
+        {segActive && <canvas ref={segCanvasRef} className="stage-layer stage-person" aria-hidden="true" />}
         {mediaKind === "audio" && !overImage && <div className="audio-art"><span>OPENCAST</span><strong>{mediaName}</strong><i /></div>}
         {overImage && <img className="stage-layer stage-over" src={overImage.url} alt={overImage.name} />}
         {caption.words.length > 0 && (

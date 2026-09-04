@@ -56,6 +56,7 @@ export type ProjectSnapshot = {
   /** Optional for older saved snapshots that predate on-screen elements. */
   overlays?: ImageOverlay[];
   captionsEnabled?: boolean;
+  backgroundRemoval?: boolean;
 };
 
 type EditorState = {
@@ -78,6 +79,7 @@ type EditorState = {
   activeCompositionId: string | null;
   overlays: ImageOverlay[];
   captionsEnabled: boolean;
+  backgroundRemoval: boolean;
   selectedWordIds: string[];
   playbackTime: number;
   isPlaying: boolean;
@@ -126,6 +128,7 @@ type EditorState = {
   cutWordsFromActiveComposition: (ids: string[]) => number;
   removeFillersFromActiveComposition: () => number;
   setCaptionsEnabled: (enabled: boolean) => void;
+  setBackgroundRemoval: (enabled: boolean) => void;
   addImageOverlay: (overlay: { url: string; start: number; end: number; layer?: OverlayLayer; name?: string }) => ImageOverlay;
   removeOverlay: (id: string) => boolean;
   undo: () => boolean;
@@ -180,6 +183,7 @@ export function blankProjectSnapshot(title = "Untitled podcast"): ProjectSnapsho
     compositions: [],
     overlays: [],
     captionsEnabled: true,
+    backgroundRemoval: false,
   };
 }
 
@@ -309,6 +313,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     activeCompositionId: null,
     overlays: [],
     captionsEnabled: true,
+    backgroundRemoval: false,
     selectedWordIds: [],
     playbackTime: 0,
     isPlaying: false,
@@ -811,6 +816,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     setCaptionsEnabled: (enabled) => set((state) => ({ captionsEnabled: Boolean(enabled), projectRevision: state.projectRevision + 1 })),
 
+    setBackgroundRemoval: (enabled) => set((state) => ({ backgroundRemoval: Boolean(enabled), projectRevision: state.projectRevision + 1 })),
+
     addImageOverlay: ({ url, start, end, layer, name }) => {
       const trimmedUrl = url.trim();
       if (!/^(https?:|data:image\/)/i.test(trimmedUrl)) throw new Error("Overlay images need an https or data:image URL.");
@@ -929,6 +936,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         })),
         programSegments: state.programSegments.map((segment) => ({ ...segment })),
         captionsEnabled: state.captionsEnabled,
+        backgroundRemoval: state.backgroundRemoval,
         overlays: state.overlays.map(({ id, name, layer, start, end }) => ({ id, name, layer, start, end })),
         activeCompositionId: state.activeCompositionId,
         compositions: state.compositions.map((composition) => ({
@@ -973,6 +981,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         })),
         overlays: state.overlays.map((overlay) => ({ ...overlay })),
         captionsEnabled: state.captionsEnabled,
+        backgroundRemoval: state.backgroundRemoval,
       };
     },
 
@@ -1002,6 +1011,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         activeCompositionId: null,
         overlays: (next.overlays ?? []).filter((overlay) => overlay?.kind === "image" && typeof overlay.url === "string"),
         captionsEnabled: next.captionsEnabled !== false,
+        backgroundRemoval: next.backgroundRemoval === true,
         selectedWordIds: [],
         playbackTime: 0,
         isPlaying: false,

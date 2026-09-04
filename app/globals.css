@@ -721,6 +721,8 @@ h1, .library-header h1, .login-card h1 {
 .stage-layer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .stage-under { z-index: 0; }
 .media-stage video { position: relative; z-index: 1; }
+.media-stage video.video-hidden { visibility: hidden; }
+.stage-person { z-index: 1; object-fit: contain; }
 .stage-over { z-index: 2; }
 .caption-track {
   position: absolute;

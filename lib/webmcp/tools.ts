@@ -329,6 +329,15 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
       }),
     },
     {
+      name: "set_background_removal",
+      description: "Toggle person/background separation on the footage. With it on, an under-layer image becomes the visible background, live in the preview and burned into the composed webm export.",
+      inputSchema: objectSchema({ enabled: { type: "boolean" } }, ["enabled"]),
+      execute: run("set_background_removal", (args) => {
+        state().setBackgroundRemoval(args.enabled === true);
+        return { backgroundRemoval: args.enabled === true, message: args.enabled === true ? "Background removal is on." : "Background removal is off." };
+      }),
+    },
+    {
       name: "list_overlays",
       description: "List the timed images layered on the preview, and whether captions are on.",
       inputSchema: objectSchema(),
@@ -484,10 +493,10 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
     },
     {
       name: "export",
-      description: "Render the edited recording locally as MP4 or MP3, or download an SRT transcript.",
-      inputSchema: objectSchema({ format: { type: "string", enum: ["mp4", "mp3", "srt"] } }, ["format"]),
+      description: "Render the open cut (full episode or the active composition) in this browser. webm is the composed render — captions, image layers, and background removal burned in, YouTube-ready; it plays the kept ranges in real time, so a 40s clip takes about 40s. mp4/mp3 are plain cuts; srt is the transcript.",
+      inputSchema: objectSchema({ format: { type: "string", enum: ["webm", "mp4", "mp3", "srt"] } }, ["format"]),
       execute: run("export", (args) => {
-        const format = args.format === "mp3" || args.format === "srt" ? args.format : "mp4";
+        const format = args.format === "mp3" || args.format === "srt" || args.format === "mp4" ? args.format : "webm";
         state().requestExport(format);
         return { queued: true, format, message: `Queued local ${format.toUpperCase()} export.` };
       }),

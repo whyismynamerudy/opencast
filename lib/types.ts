@@ -110,5 +110,5 @@ export type AgentActivity = {
 
 export type ExportRequest = {
   id: string;
-  format: "mp4" | "mp3" | "srt";
+  format: "mp4" | "mp3" | "srt" | "webm";
 } | null;
