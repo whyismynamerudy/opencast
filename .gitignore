@@ -5,4 +5,4 @@ out/
 .env*
 !.env.example
 .vercel/
-docs/SUBMISSION.local.md
+docs/*.local.md
