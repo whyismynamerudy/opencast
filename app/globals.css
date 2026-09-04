@@ -783,9 +783,37 @@ h1, .library-header h1, .login-card h1 {
 .studio-inspector { min-width: 0; overflow: hidden; border-left: var(--glass-border); background: var(--glass); backdrop-filter: var(--glass-blur); transition: opacity 0.16s var(--ease-out); }
 .inspector-closed .studio-inspector { border-left-color: transparent; opacity: 0; pointer-events: none; }
 .inspector-scroll { height: 100%; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--rule-2) transparent; }
-.edit-hub, .source-manager, .agent-panel, .export-box { padding: 18px; border-bottom: var(--hair) solid var(--rule); }
-.transcript-header h2, .timeline-panel h2, .edit-hub h2, .agent-panel h2, .source-manager h2, .export-box h3 { margin: 4px 0 0; }
-.edit-hub h2, .agent-panel h2, .source-manager h2, .export-box h3 { color: var(--ink); font-family: var(--font-display); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.edit-hub, .compositions-panel, .source-manager, .agent-panel, .export-box { padding: 18px; border-bottom: var(--hair) solid var(--rule); }
+.transcript-header h2, .timeline-panel h2, .edit-hub h2, .compositions-panel h2, .agent-panel h2, .source-manager h2, .export-box h3 { margin: 4px 0 0; }
+.edit-hub h2, .compositions-panel h2, .agent-panel h2, .source-manager h2, .export-box h3 { color: var(--ink); font-family: var(--font-display); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* compositions — named cuts sharing the episode's media */
+.composition-list { display: grid; gap: 4px; margin-top: 14px; }
+.composition-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 4px 8px;
+  color: var(--ink-2);
+  border: var(--hair) solid var(--rule);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+.composition-row svg { color: var(--muted); }
+.composition-row.active { border-color: var(--accent); background: oklch(97% 0.012 78 / 0.55); }
+.composition-row.active > svg { color: var(--accent); }
+.composition-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composition-row small { color: var(--muted); font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; }
+.composition-row input { min-width: 0; padding: 4px 5px; color: var(--ink); border: var(--hair) solid transparent; background: transparent; font-size: 12px; }
+.composition-row input:hover { border-color: var(--rule); }
+.composition-row input:focus { border-color: var(--rule-2); background: var(--proof-paper); }
+.composition-delete { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--muted); border: 0; background: transparent; }
+.composition-delete:hover { color: var(--accent-bright); }
+button.composition-row { cursor: pointer; grid-template-columns: auto minmax(0, 1fr) auto; }
+button.composition-row:hover { border-color: var(--rule-2); }
 
 /* the cutting desk — user-facing controls on the shared action hub */
 .hub-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 14px; }

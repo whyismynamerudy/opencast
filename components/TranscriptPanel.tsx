@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Eraser, LoaderCircle, RotateCcw, Scissors } from "lucide-react";
+import { wordInSegments } from "@/lib/compositions";
 import { isWordCut } from "@/lib/edits";
 import { workerStageLabel } from "@/lib/mediaStatus";
 import { useEditorStore } from "@/lib/store";
@@ -22,13 +23,26 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   const restoreWords = useEditorStore((state) => state.restoreWords);
   const removeFillers = useEditorStore((state) => state.removeFillers);
   const removeSilences = useEditorStore((state) => state.removeSilences);
+  const compositions = useEditorStore((state) => state.compositions);
+  const activeCompositionId = useEditorStore((state) => state.activeCompositionId);
+  const cutWordsFromActiveComposition = useEditorStore((state) => state.cutWordsFromActiveComposition);
+  const removeFillersFromActiveComposition = useEditorStore((state) => state.removeFillersFromActiveComposition);
 
+  const activeComposition = compositions.find((composition) => composition.id === activeCompositionId) ?? null;
   const hasActiveSourceTranscript = Boolean(activeSourceId && words.some((word) => word.sourceId === activeSourceId));
-  const sourceWords = activeSourceId && hasActiveSourceTranscript
-    ? words.filter((word) => word.sourceId === activeSourceId)
-    : words;
+  // A composition reads across every source; the per-angle filter applies
+  // only on the full episode.
+  const sourceWords = activeComposition
+    ? words.filter((word) => wordInSegments(word, activeComposition.segments))
+    : activeSourceId && hasActiveSourceTranscript
+      ? words.filter((word) => word.sourceId === activeSourceId)
+      : words;
   const selectedDeleted = sourceWords.filter((word) => selected.includes(word.id) && word.deleted).length;
-  const action = () => selectedDeleted === selected.length ? restoreWords(selected) : deleteWords(selected);
+  const action = () => {
+    if (activeComposition) return cutWordsFromActiveComposition(selected);
+    return selectedDeleted === selected.length ? restoreWords(selected) : deleteWords(selected);
+  };
+  const cleanFillers = () => activeComposition ? removeFillersFromActiveComposition() : removeFillers();
 
   // Auto-detected speakers are stored as "<file name> · <label>" so they stay
   // unique across sources; the printed tag should never carry the file name.
@@ -73,15 +87,22 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
   return (
     <section className="transcript-panel">
       <header className="transcript-header">
-        <div><p className="panel-kicker">Transcript</p><h2>{activeSourceName || "Edit the words. The recording follows."}</h2></div>
+        <div><p className="panel-kicker">{activeComposition ? "Composition" : "Transcript"}</p><h2>{activeComposition ? activeComposition.title : activeSourceName || "Edit the words. The recording follows."}</h2></div>
         <div className="quick-actions" aria-label="Transcript actions">
-          <button type="button" onClick={() => removeFillers()}><Eraser size={14} /> Remove fillers</button>
-          <button type="button" onClick={() => removeSilences()}><Scissors size={14} /> Remove silence</button>
-          <button type="button" onClick={action} disabled={!selected.length}>{selectedDeleted === selected.length ? <RotateCcw size={14} /> : <Scissors size={14} />}{selectedDeleted === selected.length ? "Restore" : "Cut"}</button>
+          <button type="button" onClick={() => cleanFillers()}><Eraser size={14} /> Remove fillers</button>
+          {!activeComposition && <button type="button" onClick={() => removeSilences()}><Scissors size={14} /> Remove silence</button>}
+          <button type="button" onClick={action} disabled={!selected.length}>{!activeComposition && selectedDeleted === selected.length ? <RotateCcw size={14} /> : <Scissors size={14} />}{!activeComposition && selectedDeleted === selected.length ? "Restore" : "Cut"}</button>
         </div>
       </header>
       <div className="transcript-scroll" ref={scrollRef}>
-        {!sourceWords.length && activeSource && <div className="transcript-pending">
+        {activeComposition && !sourceWords.length && <div className="transcript-pending">
+          <Scissors size={18} />
+          <div>
+            <strong>Nothing here yet.</strong>
+            <span>Open the full episode, select words, and add them to this composition.</span>
+          </div>
+        </div>}
+        {!activeComposition && !sourceWords.length && activeSource && <div className="transcript-pending">
           <LoaderCircle className="spin" size={18} />
           <div>
             <strong>Transcript incoming.</strong>

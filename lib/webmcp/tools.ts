@@ -249,6 +249,77 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
       }),
     },
     {
+      name: "list_compositions",
+      description: "List this project's compositions — named cuts (hook, clip, highlight reel) assembled from ranges of the episode's master timeline. Includes which one is open in the editor (null means the full episode).",
+      inputSchema: objectSchema(),
+      execute: run("list_compositions", () => ({
+        activeCompositionId: state().activeCompositionId,
+        compositions: state().compositions.map((composition) => ({
+          id: composition.id,
+          title: composition.title,
+          durationSeconds: composition.segments.reduce((total, segment) => total + segment.end - segment.start, 0),
+          segments: composition.segments.map(({ start, end }) => ({ start, end })),
+        })),
+        message: "Listed compositions.",
+      })),
+    },
+    {
+      name: "create_composition",
+      description: "Create a named composition from master-timeline ranges (use find_in_transcript or get_transcript to choose them). By default the editor opens it so the user watches it take shape; pass open=false to build it in the background.",
+      inputSchema: objectSchema({
+        title: { type: "string", minLength: 1, maxLength: 80 },
+        ranges: { type: "array", maxItems: 60, items: objectSchema({ start: { type: "number", minimum: 0 }, end: { type: "number", minimum: 0 } }, ["start", "end"]) },
+        open: { type: "boolean" },
+      }),
+      execute: run("create_composition", (args) => {
+        const ranges = Array.isArray(args.ranges)
+          ? (args.ranges as Array<{ start: number; end: number }>).map((range) => ({ start: Number(range.start), end: Number(range.end) }))
+          : [];
+        const composition = state().createComposition(typeof args.title === "string" ? args.title : undefined, ranges, args.open !== false);
+        return { composition_id: composition.id, title: composition.title, segments: composition.segments, message: `Created “${composition.title}”.` };
+      }),
+    },
+    {
+      name: "add_to_composition",
+      description: "Add a master-timeline range to a composition. Overlapping ranges merge automatically.",
+      inputSchema: objectSchema({ composition_id: { type: "string", minLength: 1 }, start: { type: "number", minimum: 0 }, end: { type: "number", minimum: 0 } }, ["composition_id", "start", "end"]),
+      execute: run("add_to_composition", (args) => {
+        const outcome = state().addToComposition(String(args.composition_id ?? ""), [{ start: Number(args.start), end: Number(args.end) }]);
+        if (!outcome.ok) throw new Error("That composition does not exist in the open project.");
+        return { addedSeconds: outcome.seconds, message: `Added ${outcome.seconds.toFixed(1)}s to the composition.` };
+      }),
+    },
+    {
+      name: "remove_from_composition",
+      description: "Remove a master-timeline range from a composition, splitting segments as needed. The full episode is never affected.",
+      inputSchema: objectSchema({ composition_id: { type: "string", minLength: 1 }, start: { type: "number", minimum: 0 }, end: { type: "number", minimum: 0 } }, ["composition_id", "start", "end"]),
+      execute: run("remove_from_composition", (args) => {
+        const outcome = state().removeFromComposition(String(args.composition_id ?? ""), [{ start: Number(args.start), end: Number(args.end) }]);
+        if (!outcome.ok) throw new Error("That composition does not exist in the open project.");
+        return { removedSeconds: outcome.seconds, message: `Removed ${outcome.seconds.toFixed(1)}s from the composition.` };
+      }),
+    },
+    {
+      name: "open_composition",
+      description: "Switch the visible editor between a composition and the full episode. Omit composition_id to return to the full episode.",
+      inputSchema: objectSchema({ composition_id: { type: "string", minLength: 1 } }),
+      execute: run("open_composition", (args) => {
+        const id = typeof args.composition_id === "string" && args.composition_id ? args.composition_id : null;
+        if (!state().setActiveComposition(id)) throw new Error("That composition does not exist in the open project.");
+        return { activeCompositionId: id, message: id ? "Opened the composition." : "Returned to the full episode." };
+      }),
+    },
+    {
+      name: "delete_composition",
+      description: "Delete a composition. Requires confirm=true. The episode and its media are unaffected.",
+      inputSchema: objectSchema({ composition_id: { type: "string", minLength: 1 }, confirm: { type: "boolean", const: true } }, ["composition_id", "confirm"]),
+      execute: run("delete_composition", (args) => {
+        if (args.confirm !== true) throw new Error("Set confirm=true to delete this composition.");
+        if (!state().deleteComposition(String(args.composition_id ?? ""))) throw new Error("That composition does not exist in the open project.");
+        return { deleted: true, message: "Deleted the composition." };
+      }),
+    },
+    {
       name: "apply_program_cut",
       description: "Choose which source is visible for a master-timeline range. Supply expected_revision from propose_program_cut or get_project_state to avoid overwriting a newer live edit.",
       inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 }, start: { type: "number", minimum: 0 }, end: { type: "number", minimum: 0 }, expected_revision: { type: "integer", minimum: 0 } }, ["source_id", "start", "end", "expected_revision"]),

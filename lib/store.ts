@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { addRange, normalizeSegments, segmentsDuration, subtractRange, wordInSegments, wordsToRanges, type Composition } from "./compositions";
 import { getClipSegments, getCutRanges, getKeepRanges, editedDuration } from "./edits";
 import { fillerWordIds, normalizeToken } from "./fillers";
 import { detectSilences } from "./silences";
@@ -48,6 +49,8 @@ export type ProjectSnapshot = {
   speakers: Speaker[];
   activity: AgentActivity[];
   transcription: TranscriptionState;
+  /** Optional for older saved snapshots that predate compositions. */
+  compositions?: Composition[];
 };
 
 type EditorState = {
@@ -66,6 +69,8 @@ type EditorState = {
   manualCuts: ManualCut[];
   sceneBoundaries: SceneBoundary[];
   speakers: Speaker[];
+  compositions: Composition[];
+  activeCompositionId: string | null;
   selectedWordIds: string[];
   playbackTime: number;
   isPlaying: boolean;
@@ -105,6 +110,14 @@ type EditorState = {
   findInTranscript: (query: string) => TranscriptMatch[];
   splitAt: (time: number) => boolean;
   trimClip: (clipIndex: number, edge: "start" | "end", toTime: number) => boolean;
+  createComposition: (title?: string, ranges?: TimeRange[], open?: boolean) => Composition;
+  renameComposition: (id: string, title: string) => boolean;
+  deleteComposition: (id: string) => boolean;
+  setActiveComposition: (id: string | null) => boolean;
+  addToComposition: (id: string, ranges: TimeRange[]) => { ok: boolean; seconds: number };
+  removeFromComposition: (id: string, ranges: TimeRange[]) => { ok: boolean; seconds: number };
+  cutWordsFromActiveComposition: (ids: string[]) => number;
+  removeFillersFromActiveComposition: () => number;
   undo: () => boolean;
   redo: () => boolean;
   setPlaybackTime: (time: number) => void;
@@ -154,16 +167,21 @@ export function blankProjectSnapshot(title = "Untitled podcast"): ProjectSnapsho
     speakers: [],
     activity: [],
     transcription: initialTranscription(),
+    compositions: [],
   };
 }
 
-function cloneSnapshot(state: Pick<EditorState, "words" | "manualCuts" | "sceneBoundaries" | "speakers" | "programSegments">): EditorSnapshot {
+function cloneSnapshot(state: Pick<EditorState, "words" | "manualCuts" | "sceneBoundaries" | "speakers" | "programSegments" | "compositions">): EditorSnapshot {
   return {
     words: state.words.map((word) => ({ ...word })),
     manualCuts: state.manualCuts.map((cut) => ({ ...cut })),
     sceneBoundaries: state.sceneBoundaries.map((boundary) => ({ ...boundary })),
     speakers: state.speakers.map((speaker) => ({ ...speaker })),
     programSegments: state.programSegments.map((segment) => ({ ...segment })),
+    compositions: state.compositions.map((composition) => ({
+      ...composition,
+      segments: composition.segments.map((segment) => ({ ...segment })),
+    })),
   };
 }
 
@@ -192,6 +210,10 @@ function restoredSource(source: SavedMediaSource): MediaSource {
 function cloneProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
   return {
     ...snapshot,
+    compositions: (snapshot.compositions ?? []).map((composition) => ({
+      ...composition,
+      segments: (composition.segments ?? []).map((segment) => ({ ...segment })),
+    })),
     mediaSources: snapshot.mediaSources.map((source) => ({ ...source })),
     programSegments: snapshot.programSegments.map((segment) => ({ ...segment })),
     words: snapshot.words.map((word) => ({ ...word })),
@@ -248,6 +270,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
       future: [],
       selectedWordIds: [],
       projectRevision: current.projectRevision + 1,
+      activeCompositionId: next.compositions.some((composition) => composition.id === current.activeCompositionId)
+        ? current.activeCompositionId
+        : null,
     });
   };
 
@@ -267,6 +292,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
     manualCuts: [],
     sceneBoundaries: [],
     speakers: [],
+    compositions: [],
+    activeCompositionId: null,
     selectedWordIds: [],
     playbackTime: 0,
     isPlaying: false,
@@ -682,6 +709,91 @@ export const useEditorStore = create<EditorState>((set, get) => {
       return true;
     },
 
+    createComposition: (title, ranges, open = true) => {
+      const state = get();
+      const trimmed = title?.trim().slice(0, 80) || `Composition ${state.compositions.length + 1}`;
+      const composition: Composition = {
+        id: crypto.randomUUID(),
+        title: trimmed,
+        segments: normalizeSegments((ranges ?? []).map(({ start, end }) => ({ start, end }))),
+      };
+      commit({ ...cloneSnapshot(state), compositions: [...state.compositions, composition] });
+      if (open) set({ activeCompositionId: composition.id });
+      return composition;
+    },
+
+    renameComposition: (id, title) => {
+      const state = get();
+      const normalized = title.trim().slice(0, 80);
+      if (!normalized || !state.compositions.some((composition) => composition.id === id)) return false;
+      commit({
+        ...cloneSnapshot(state),
+        compositions: state.compositions.map((composition) => composition.id === id ? { ...composition, title: normalized } : composition),
+      });
+      return true;
+    },
+
+    deleteComposition: (id) => {
+      const state = get();
+      if (!state.compositions.some((composition) => composition.id === id)) return false;
+      commit({ ...cloneSnapshot(state), compositions: state.compositions.filter((composition) => composition.id !== id) });
+      return true;
+    },
+
+    setActiveComposition: (id) => {
+      const state = get();
+      if (id !== null && !state.compositions.some((composition) => composition.id === id)) return false;
+      set({ activeCompositionId: id, selectedWordIds: [] });
+      return true;
+    },
+
+    addToComposition: (id, ranges) => {
+      const state = get();
+      const composition = state.compositions.find((item) => item.id === id);
+      if (!composition || !ranges.length) return { ok: false, seconds: 0 };
+      const segments = ranges.reduce((current, range) => addRange(current, range.start, range.end), composition.segments);
+      const seconds = segmentsDuration(segments) - segmentsDuration(composition.segments);
+      commit({
+        ...cloneSnapshot(state),
+        compositions: state.compositions.map((item) => item.id === id ? { ...item, segments } : item),
+      });
+      return { ok: true, seconds };
+    },
+
+    removeFromComposition: (id, ranges) => {
+      const state = get();
+      const composition = state.compositions.find((item) => item.id === id);
+      if (!composition || !ranges.length) return { ok: false, seconds: 0 };
+      const segments = ranges.reduce((current, range) => subtractRange(current, range.start, range.end), composition.segments);
+      const seconds = segmentsDuration(composition.segments) - segmentsDuration(segments);
+      commit({
+        ...cloneSnapshot(state),
+        compositions: state.compositions.map((item) => item.id === id ? { ...item, segments } : item),
+      });
+      return { ok: true, seconds };
+    },
+
+    cutWordsFromActiveComposition: (ids) => {
+      const state = get();
+      const active = state.compositions.find((composition) => composition.id === state.activeCompositionId);
+      if (!active || !ids.length) return 0;
+      const idSet = new Set(ids);
+      const words = state.words.filter((word) => idSet.has(word.id) && wordInSegments(word, active.segments));
+      if (!words.length) return 0;
+      get().removeFromComposition(active.id, wordsToRanges(words));
+      return words.length;
+    },
+
+    removeFillersFromActiveComposition: () => {
+      const state = get();
+      const active = state.compositions.find((composition) => composition.id === state.activeCompositionId);
+      if (!active) return 0;
+      const fillerIds = new Set(fillerWordIds(state.words));
+      return get().cutWordsFromActiveComposition(state.words
+        .filter((word) => fillerIds.has(word.id) && wordInSegments(word, active.segments))
+        .map((word) => word.id));
+    },
+
     undo: () => {
       const state = get();
       const previous = state.history.at(-1);
@@ -692,6 +804,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         future: [cloneSnapshot(state), ...state.future].slice(0, MAX_HISTORY),
         selectedWordIds: [],
         projectRevision: state.projectRevision + 1,
+        activeCompositionId: previous.compositions.some((composition) => composition.id === state.activeCompositionId)
+          ? state.activeCompositionId
+          : null,
       });
       return true;
     },
@@ -706,6 +821,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         future: state.future.slice(1),
         selectedWordIds: [],
         projectRevision: state.projectRevision + 1,
+        activeCompositionId: next.compositions.some((composition) => composition.id === state.activeCompositionId)
+          ? state.activeCompositionId
+          : null,
       });
       return true;
     },
@@ -769,6 +887,13 @@ export const useEditorStore = create<EditorState>((set, get) => {
           ingestJobId: source.ingestJobId,
         })),
         programSegments: state.programSegments.map((segment) => ({ ...segment })),
+        activeCompositionId: state.activeCompositionId,
+        compositions: state.compositions.map((composition) => ({
+          id: composition.id,
+          title: composition.title,
+          duration: segmentsDuration(composition.segments),
+          segments: composition.segments.map(({ start, end }) => ({ start, end })),
+        })),
         transcription: {
           stage: state.transcription.stage,
           progress: state.transcription.progress,
@@ -799,6 +924,10 @@ export const useEditorStore = create<EditorState>((set, get) => {
           waveform: [...state.transcription.waveform],
           speakerTurns: state.transcription.speakerTurns.map((turn) => ({ ...turn })),
         },
+        compositions: state.compositions.map((composition) => ({
+          ...composition,
+          segments: composition.segments.map((segment) => ({ ...segment })),
+        })),
       };
     },
 
@@ -821,6 +950,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
         manualCuts: next.manualCuts,
         sceneBoundaries: next.sceneBoundaries,
         speakers: next.speakers,
+        compositions: (next.compositions ?? []).map((composition) => ({
+          ...composition,
+          segments: normalizeSegments(composition.segments ?? []),
+        })),
+        activeCompositionId: null,
         selectedWordIds: [],
         playbackTime: 0,
         isPlaying: false,

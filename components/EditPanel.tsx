@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Check, Eraser, Redo2, RotateCcw, Scissors, Undo2 } from "lucide-react";
+import { wordsToRanges } from "@/lib/compositions";
 import { useEditorStore } from "@/lib/store";
 import { formatTime } from "./MediaPreview";
 
@@ -25,6 +26,12 @@ export function EditPanel() {
   const renameSpeaker = useEditorStore((state) => state.renameSpeaker);
   const reassignSpeaker = useEditorStore((state) => state.reassignSpeaker);
   const addActivity = useEditorStore((state) => state.addActivity);
+  const compositions = useEditorStore((state) => state.compositions);
+  const activeCompositionId = useEditorStore((state) => state.activeCompositionId);
+  const createComposition = useEditorStore((state) => state.createComposition);
+  const addToComposition = useEditorStore((state) => state.addToComposition);
+  const cutWordsFromActiveComposition = useEditorStore((state) => state.cutWordsFromActiveComposition);
+  const removeFillersFromActiveComposition = useEditorStore((state) => state.removeFillersFromActiveComposition);
   const [correction, setCorrection] = useState("");
 
   const selectedDeleted = words.filter((word) => selected.includes(word.id) && word.deleted).length;
@@ -43,7 +50,7 @@ export function EditPanel() {
   };
 
   const cleanFillers = () => {
-    const removed = removeFillers();
+    const removed = activeCompositionId ? removeFillersFromActiveComposition() : removeFillers();
     addActivity("remove_fillers", removed ? `Removed ${removed} filler words.` : "No filler words left.", "success");
   };
   const cleanSilences = () => {
@@ -54,8 +61,28 @@ export function EditPanel() {
     if (splitAt(playbackTime)) addActivity("split_at", `Split the clip at ${formatTime(playbackTime)}.`, "success");
   };
   const cutSelection = () => {
+    if (activeCompositionId) {
+      const removed = cutWordsFromActiveComposition(selected);
+      if (removed) addActivity("remove_from_composition", `Removed ${removed} words from the composition.`, "success");
+      return;
+    }
     if (allSelectedDeleted) { restoreWords(selected); addActivity("restore_words", `Restored ${selected.length} words.`, "success"); }
     else { deleteWords(selected); addActivity("delete_words", `Cut ${selected.length} words.`, "success"); }
+  };
+
+  const sendToComposition = (target: string) => {
+    const selectedWords = words.filter((word) => selected.includes(word.id));
+    if (!selectedWords.length) return;
+    const ranges = wordsToRanges(selectedWords);
+    if (target === "new") {
+      const composition = createComposition(undefined, ranges, false);
+      addActivity("create_composition", `Started “${composition.title}” with ${selectedWords.length} words.`, "success");
+      return;
+    }
+    const composition = compositions.find((item) => item.id === target);
+    if (!composition) return;
+    const { seconds } = addToComposition(target, ranges);
+    addActivity("add_to_composition", `Added ${seconds.toFixed(1)}s to “${composition.title}”.`, "success");
   };
   const applyCorrection = () => {
     const text = correction.trim();
@@ -80,7 +107,7 @@ export function EditPanel() {
       <div className="hub-actions">
         <button type="button" onClick={cleanFillers}><Eraser size={13} /> Remove fillers</button>
         <button type="button" onClick={cleanSilences}><Scissors size={13} /> Remove silence</button>
-        <button type="button" onClick={split} disabled={!words.length}><Scissors size={13} /> Split at {formatTime(playbackTime)}</button>
+        <button type="button" onClick={split} disabled={!words.length || Boolean(activeCompositionId)}><Scissors size={13} /> Split at {formatTime(playbackTime)}</button>
         <button type="button" onClick={() => undo()} disabled={!history.length}><Undo2 size={13} /> Undo</button>
         <button type="button" onClick={() => redo()} disabled={!future.length}><Redo2 size={13} /> Redo</button>
       </div>
@@ -90,7 +117,7 @@ export function EditPanel() {
           <p className="panel-kicker">Selection · {selected.length} word{selected.length === 1 ? "" : "s"}</p>
           <blockquote>{selectedText.length > 90 ? `${selectedText.slice(0, 90)}…` : selectedText}</blockquote>
           <div className="hub-selection-actions">
-            <button type="button" onClick={cutSelection}>{allSelectedDeleted ? <><RotateCcw size={13} /> Restore</> : <><Scissors size={13} /> Cut</>}</button>
+            <button type="button" onClick={cutSelection}>{!activeCompositionId && allSelectedDeleted ? <><RotateCcw size={13} /> Restore</> : <><Scissors size={13} /> Cut</>}</button>
             {speakers.length > 1 && (
               <select aria-label="Reassign selection to speaker" value="" onChange={(event) => reassign(Number(event.target.value))}>
                 <option value="" disabled>Assign speaker…</option>
@@ -98,6 +125,15 @@ export function EditPanel() {
               </select>
             )}
           </div>
+          {!activeCompositionId && (
+            <div className="hub-selection-actions">
+              <select aria-label="Add selection to a composition" value="" onChange={(event) => sendToComposition(event.target.value)}>
+                <option value="" disabled>Add to composition…</option>
+                <option value="new">New composition</option>
+                {compositions.map((composition) => <option key={composition.id} value={composition.id}>{composition.title}</option>)}
+              </select>
+            </div>
+          )}
           <div className="hub-correct">
             <input
               aria-label="Correct the selected text"

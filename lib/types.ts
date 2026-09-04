@@ -71,6 +71,7 @@ export type EditorSnapshot = {
   sceneBoundaries: SceneBoundary[];
   speakers: Speaker[];
   programSegments: import("./multicam").ProgramSegment[];
+  compositions: import("./compositions").Composition[];
 };
 
 export type TranscriptMatch = {

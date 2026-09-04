@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Download, FolderOpen, LogOut, PanelRightClose, PanelRightOpen, Redo2, Undo2 } from "lucide-react";
+import { invertSegments, masterToCompositionTime, wordInSegments } from "@/lib/compositions";
 import { getClipSegments, getCutRanges, getKeepRanges } from "@/lib/edits";
 import { renderCutMedia } from "@/lib/ffmpeg";
 import { downloadBlob, wordsToSrt } from "@/lib/serializeTranscript";
 import { useEditorStore } from "@/lib/store";
 import { AgentActivityPanel } from "./AgentActivityPanel";
+import { CompositionsPanel } from "./CompositionsPanel";
 import { EditPanel } from "./EditPanel";
 import { ExportDialog } from "./ExportDialog";
 import { MediaPreview, formatTime } from "./MediaPreview";
@@ -38,11 +40,21 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
   const undo = useEditorStore((state) => state.undo);
   const redo = useEditorStore((state) => state.redo);
   const deleteWords = useEditorStore((state) => state.deleteWords);
+  const compositions = useEditorStore((state) => state.compositions);
+  const activeCompositionId = useEditorStore((state) => state.activeCompositionId);
+  const cutWordsFromActiveComposition = useEditorStore((state) => state.cutWordsFromActiveComposition);
   const [inspectorOpen, setInspectorOpen] = useState(true);
 
-  const cuts = useMemo(() => getCutRanges(words, manualCuts, duration), [words, manualCuts, duration]);
+  const activeComposition = compositions.find((composition) => composition.id === activeCompositionId) ?? null;
+  const cuts = useMemo(
+    () => activeComposition ? invertSegments(activeComposition.segments, duration) : getCutRanges(words, manualCuts, duration),
+    [activeComposition, words, manualCuts, duration],
+  );
   const keepRanges = useMemo(() => getKeepRanges(cuts, duration), [cuts, duration]);
-  const clips = useMemo(() => getClipSegments(keepRanges, boundaries), [keepRanges, boundaries]);
+  const clips = useMemo(
+    () => getClipSegments(keepRanges, activeComposition ? [] : boundaries),
+    [keepRanges, boundaries, activeComposition],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -52,12 +64,13 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
       }
       if ((event.key === "Backspace" || event.key === "Delete") && selected.length && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
         event.preventDefault();
-        deleteWords(selected);
+        if (activeCompositionId) cutWordsFromActiveComposition(selected);
+        else deleteWords(selected);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteWords, redo, selected, undo]);
+  }, [activeCompositionId, cutWordsFromActiveComposition, deleteWords, redo, selected, undo]);
 
   useEffect(() => {
     if (!exportRequest) return;
@@ -65,10 +78,23 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
     const exportCurrentProject = async () => {
       try {
         const state = useEditorStore.getState();
+        const composition = state.compositions.find((item) => item.id === state.activeCompositionId) ?? null;
+        const exportName = composition ? composition.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "composition" : "opencast-edited";
         if (exportRequest.format === "srt") {
-          const blob = new Blob([wordsToSrt(state.words)], { type: "text/plain;charset=utf-8" });
-          downloadBlob(blob, "opencast-edited.srt");
-          state.addActivity("export", "Downloaded the edited SRT transcript.", "success");
+          // A composition exports on its own running clock, matching the
+          // media that a render of the same ranges would produce.
+          const exportWords = composition
+            ? state.words
+              .filter((word) => !word.deleted && wordInSegments(word, composition.segments))
+              .map((word) => ({
+                ...word,
+                start: masterToCompositionTime(composition.segments, word.start),
+                end: masterToCompositionTime(composition.segments, word.end),
+              }))
+            : state.words;
+          const blob = new Blob([wordsToSrt(exportWords)], { type: "text/plain;charset=utf-8" });
+          downloadBlob(blob, `${exportName}.srt`);
+          state.addActivity("export", composition ? `Downloaded the “${composition.title}” SRT.` : "Downloaded the edited SRT transcript.", "success");
           state.setExportStatus("ready");
           return;
         }
@@ -76,16 +102,19 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
         if (state.mediaSources.length > 1) {
           throw new Error("Multicam MP4/MP3 rendering belongs to the media worker. The source-aware edit plan and SRT export are ready.");
         }
+        const exportKeepRanges = composition
+          ? composition.segments.map(({ start, end }) => ({ start, end }))
+          : state.getKeepRanges();
         const blob = await renderCutMedia({
           file: state.mediaFile,
           kind: state.mediaKind,
-          keepRanges: state.getKeepRanges(),
+          keepRanges: exportKeepRanges,
           format: exportRequest.format,
         });
         if (cancelled) return;
         const extension = exportRequest.format;
-        downloadBlob(blob, `opencast-edited.${extension}`);
-        state.addActivity("export", `Rendered ${extension.toUpperCase()} locally from ${state.getKeepRanges().length} kept ranges.`, "success");
+        downloadBlob(blob, `${exportName}.${extension}`);
+        state.addActivity("export", `Rendered ${extension.toUpperCase()} locally from ${exportKeepRanges.length} kept ranges${composition ? ` of “${composition.title}”` : ""}.`, "success");
         state.setExportStatus("ready");
       } catch (reason) {
         if (cancelled) return;
@@ -134,6 +163,7 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
         <aside className="studio-inspector" aria-label="Project details">
           <div className="inspector-scroll">
           <EditPanel />
+          <CompositionsPanel />
           <SourceManager />
           <ExportDialog />
           <AgentActivityPanel webMcpAvailable={webMcpAvailable} />
