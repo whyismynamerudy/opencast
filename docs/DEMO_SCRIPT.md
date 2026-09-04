@@ -1,9 +1,10 @@
-# Demo recording script — “Built for Hands”
+# Demo recording plan — “Built for Hands”
 
-A ~7-minute solo tech-podcast episode about WebMCP itself. It is written to be
-**deliberately imperfect**: every planted flaw below is a beat the agent fixes
-on camera during the demo. Record from the bullet points — do not read
-verbatim, or the filler words you need will disappear.
+A ~6–7 minute solo tech-podcast episode about WebMCP itself: what it is, why
+the core idea is right, and what is honestly still unsolved. It is recorded
+**deliberately imperfect** — every planted flaw below is a beat the agent
+fixes on camera during the demo. Record from talking points, not verbatim,
+or the filler words you need will disappear.
 
 ## Recording setup
 
@@ -19,77 +20,73 @@ verbatim, or the filler words you need will disappear.
 
 | # | Plant | Agent beat it enables |
 |---|-------|----------------------|
-| 1 | Natural “um / uh / like, you know” throughout | `remove_fillers` |
+| 1 | Natural “um / uh” sprinkled through the loose sections | `remove_fillers` |
 | 2 | Two or three 3–5s silent pauses (pretend to check notes) | `remove_silences` |
 | 3 | One flubbed sentence, then “let me try that again,” then the clean take | `find_in_transcript` + cut the bad take |
-| 4 | One rambling 60–90s tangent that deserves to die | “tighten this episode” judgment cut |
+| 4 | One deliberate wrong word, self-corrected aloud | `correct_text` |
 | 5 | One tight, quotable 25–40s cold open | `create_composition` → the Hook clip |
-| 6 | Say “the architecture looks like this” while describing it | `add_image_overlay` B-roll moment |
-| 7 | One deliberate wrong word, self-corrected aloud | `correct_text` |
+| 6 | Say “the architecture looks like this” while describing it | `add_image_overlay` diagram moment |
 
-## Episode outline (~7:00)
+## Episode outline (~6:30)
 
-### 0:00 – 0:45 · Cold open — THE HOOK (plant #5)
+### 0:00 – 0:40 · Cold open — THE HOOK (plant #5)
 
-Deliver this part tight and quotable; it becomes the clip composition.
-Near-verbatim is fine here:
+Tight and quotable; this becomes the clip composition. The thesis: for
+thirty years the web was built for eyeballs; WebMCP is a bet that the next
+user of your site is an agent, and instead of guessing at buttons, the page
+hands it typed, callable tools.
 
-> “For thirty years we built websites for eyeballs. Buttons, menus, layouts —
-> all of it assumes a human is looking. WebMCP is the first time we’re
-> building the web for hands. An agent doesn’t *read* your page anymore — it
-> *operates* it. And the sites that hand agents real tools, instead of making
-> them guess at buttons, are the sites that are going to win.”
+### 0:40 – 2:00 · What it actually is
 
-### 0:45 – 2:30 · Why UI-guessing agents are the wrong model (plants #1, #2)
+Technical and concrete: `document.modelContext.registerTool(name, schema,
+fn)` running as ordinary page JavaScript; the agent attached to the tab
+calls the tool and the callback runs with the page's state, session, and
+permissions. Same grammar as MCP — the difference is the transport: the
+page is the server, the logged-in session is the auth. Incubating in the
+W3C Web Machine Learning Community Group; live in ChatGPT Desktop, behind a
+flag in Chrome. *(One long pause here — plant #2.)*
 
-Talking points — speak loosely, let the fillers happen, take one long pause:
+### 2:00 – 3:20 · The good (plant #1 — speak loosely)
 
-- Screen-scraping agents click coordinates and pray; brittle, slow, blind.
-- A page already *knows* its own actions — WebMCP lets it declare them:
-  `document.modelContext.registerTool(...)`.
-- Analogy: giving a chef your kitchen vs. making them cook through the mail
-  slot.
-- The user and the agent share one visible surface — nothing happens off
-  screen.
+Three arguments: determinism versus screenshot-driven computer use; the
+human never leaves — one shared visible surface, every mutation auditable
+and undoable; and the economics — sites expose verbs they already own.
 
-### 2:30 – 4:00 · How a WebMCP site is shaped (plants #3, #6)
+### 3:20 – 4:40 · The architecture (plants #3, #6)
 
-- Say: **“The architecture looks like this”** — describe a three-layer
-  picture: page state → a shared action hub → two front ends, buttons for
-  humans and tools for agents. *(Later the agent puts a diagram on screen
-  right here.)*
-- **Plant the flub here:** start explaining tool design, stumble mid-sentence,
-  say “ugh — let me try that again,” and redo the sentence cleanly.
-- Good tools are narrow verbs with clear side effects, not “do everything.”
+Say **“the architecture looks like this”** and describe the three layers:
+page state → one shared action hub → two front ends, buttons for humans and
+tools for agents. Same verbs, nobody gets a special door; if the paths
+differ they drift. **Plant the flub here** while explaining tool design,
+then land it: narrow verbs, clear side effects, return what changed.
 
-### 4:00 – 5:30 · The tangent (plant #4)
+### 4:40 – 5:50 · The bad — deliver straight
 
-Tell a genuinely skippable 60–90s side story — e.g. the time you automated
-something with a headless browser and it broke the moment the site changed a
-CSS class, with too much detail about the CSS class. This is the material the
-agent chooses to cut when asked to tighten the episode.
+Prompt injection gets a well-typed new attack surface (tool descriptions
+are prompt input); the consent model is unfinished and browser-specific;
+the spec is pre-standard and moving; and it only exists while the tab is
+open — agency *with* you, not *for* you. Background automation is
+server-side MCP's job, and that boundary is arguably a feature.
 
-### 5:30 – 7:00 · What it means for creators + close (plant #7)
+### 5:50 – 6:30 · Close (plant #4)
 
-- Creative tools are the sharpest test: editing video by *talking* about the
-  transcript.
-- **Plant the wrong word:** “this is all in the W3C spec — sorry, the **Web
-  Machine Learning Community Group** spec.”
-- Close: “The web that’s coming isn’t one you browse. It’s one you delegate.
-  Build your site like an agent is already a user — because it is.”
+Plant the wrong word: “it's in the W3C spec — sorry, the **Web Machine
+Learning Community Group** spec.” Then the close: the web that's coming
+isn't one you browse — it's one you delegate.
 
 ## Live demo prompts (in ChatGPT Desktop, Site Tools on)
 
 Run in order; each maps to planted material:
 
-1. “Read the current project state. Don’t edit anything yet.”
+1. “Read the current project state. Don't edit anything yet.”
 2. “Remove the filler words and the long silences.”
 3. “I flubbed a sentence and restarted it — find the bad take and cut it.”
-4. “Tighten the episode — cut the weakest tangent to get it under six minutes.”
+4. “I said ‘W3C spec’ near the end when I meant the Web Machine Learning
+   Community Group — fix the transcript.”
 5. “Find the most clip-worthy passage and make it a composition called *Hook*.”
 6. “Turn on captions, remove my background, and put the studio card behind me.”
    *(Upload the background image via On screen → folder button first.)*
-7. “There’s a spot where I said the wrong spec name — fix the transcript text.”
+7. “Put the three-layers diagram on screen while I describe the architecture.”
 8. “Export the Hook as a composed video.”
 
 The exported MP4 (captions + background swap burned in) is the post-demo
@@ -97,14 +94,14 @@ YouTube artifact.
 
 ## Submission video (< 3:00) shot list
 
-- 0:00–0:20 — The problem, over the raw uploaded recording: “7 minutes of
-  podcast, ums, dead air, one bad take.”
+- 0:00–0:20 — The problem, over the raw uploaded recording — and the promise:
+  the video being edited is already on YouTube; stick around for the link.
 - 0:20–0:50 — Upload → transcript editable in under a minute (screen capture,
   timer visible).
-- 0:50–1:40 — Agent conversation: cleanup, cutting the flub, tightening.
-  Show the activity log filling as tools fire.
+- 0:50–1:40 — Agent conversation: cleanup, cutting the flub, fixing the wrong
+  word. Show the activity log filling as tools fire.
 - 1:40–2:20 — “Make me a hook”: composition appears, captions on, background
-  swapped live.
+  swapped live, diagram on screen.
 - 2:20–2:50 — Composed export downloads; cut to the finished clip playing on
   YouTube.
-- 2:50–3:00 — Live URL + repo on screen.
+- 2:50–3:00 — YouTube link, live URL, and repo on screen.
