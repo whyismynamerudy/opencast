@@ -1,25 +1,29 @@
 # OpenCast
 
-OpenCast is a WebMCP-native, transcript-first podcast editor for projects with more than one recording. Add the host camera, guest camera, screen share, and B-roll as independent sources; synchronize them on one master clock; then edit words and select the program angle in the same live project.
+OpenCast is a WebMCP-native, transcript-first podcast and video editor. Upload recordings, edit the media by editing its words, assemble named compositions (hooks, clips, highlight reels), put captions and image layers on screen, remove the background, and export a finished video — with a person and an agent working the same live project through the same actions.
 
-It is designed for ChatGPT Desktop’s built-in browser: a person sees and controls the editing surface while an agent can use the precise tools that OpenCast exposes on that page.
+It is designed for ChatGPT Desktop's built-in browser: a person sees and controls the editing surface while an agent uses the 47 precise tools that OpenCast registers on that page via `document.modelContext.registerTool()`.
+
+**Live app:** https://opencast-ten.vercel.app (credentials provided with the hackathon submission) · **Demo recording script:** [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
 
 ## Access and projects
 
-OpenCast now has a deliberately simple single-admin workspace. Sign in with **`admin` / `admin`**; the credential check and session-cookie issuance happen on the Next.js backend, and media-upload/job-ticket endpoints require that session too. This is suitable for a private demo only, not a real authentication system. Set `OPENCAST_AUTH_SECRET` in Vercel so the HttpOnly session signature is unique to your deployment.
+OpenCast has a deliberately simple single-admin workspace. Credentials are configured only through the `OPENCAST_AUTH_USERNAME` and `OPENCAST_AUTH_PASSWORD` environment variables — the repository contains none, and login fails closed until both are set. The credential check and session-cookie issuance happen on the Next.js backend, and media-upload/job-ticket endpoints require that session too. This is suitable for a private demo only, not a real authentication system. Set `OPENCAST_AUTH_SECRET` as well so the HttpOnly session signature is unique to your deployment.
 
 After sign-in, the project library lets you create, open, rename, and delete editing projects from any browser. Project snapshots live in a SQLite database on the mounted Fly volume; the authenticated Next.js app proxies project requests to that store, so ChatGPT Desktop and a normal browser see the same library. A snapshot includes words, edits, speaker/source metadata, and Fly media source keys; it intentionally never stores a local `File` or full HD original. Deleting a project also deletes its originals and job checkpoints from Fly.
 
 ## What is implemented
 
-- Multiple audio or video sources with role labels, individual sync offsets, durable storage status, and an active-angle preview.
-- A shared master timeline. Source transcripts retain native source times while the editor, agent tools, cuts, and program-angle selections use synchronized master times.
-- Transcript edits: select/cut/restore words, remove fillers and silence, split, trim, undo/redo, speaker labels, SRT export, and local single-source MP4/MP3 export.
-- A direct browser-to-Fly resumable upload path. The browser sends 16 MiB chunks straight to the worker volume, so a 60-minute HD source never passes through a Next.js request or needs to be loaded into server memory.
-- An included Docker media worker for long sources. It reads the original from Fly disk and directly creates duration-bounded low-bitrate audio chunks, then runs diarization and word timing concurrently. Transient API/upload failures retry automatically, while durable checkpoints make a manual retry resume instead of starting over.
-- A WebMCP editing surface with source upload requests, source listing/role/sync control, worker-job queueing and status, source transcript reads, program-cut proposal/application, and all original text-editing controls.
+- **Words-first transcription.** whisper-1 word timing runs in a bounded pool and the editor unlocks the moment words land (about a minute for a 45-minute episode). Speaker labels arrive as a non-blocking background enrichment — and multi-track projects skip ML diarization entirely, because the track itself identifies the speaker.
+- Transcript edits: select/cut/restore words, remove fillers and silence, correct text, split, trim, rename/reassign speakers, undo/redo — from the transcript, the Cutting-desk sidebar, or agent tools, all through one shared action hub.
+- **Compositions**: named cuts (hook, clip, highlight reel) assembled from master-timeline ranges beside the full episode. Nothing is copied; cutting inside a composition never touches the episode.
+- **On-screen elements**: live auto-captions driven by the transcript, timed image layers under (background) or over (B-roll) the footage — from a URL or uploaded from the computer — and ML background removal (MediaPipe selfie segmentation) live in the preview.
+- **Composed export**: a canvas compositor renders the kept ranges with all layers, background removal, and captions burned in, recorded with the source audio to MP4 (H.264/AAC, where the browser supports MediaRecorder MP4) or WebM — YouTube-ready. Plain MP4/MP3 cuts and remapped SRT exports remain.
+- Multiple audio or video sources with role labels, individual sync offsets, a shared master timeline, and program-angle selection; every project has its own URL (`/project/<id>`).
+- A direct browser-to-Fly resumable upload path (16 MiB chunks straight to the worker volume) and a Docker media worker with retries, durable checkpoints, and restart-resumable jobs.
+- A 47-tool WebMCP surface covering projects, sources, ingest, transcript reads/edits, compositions, on-screen elements, program cuts, playback, and export.
 
-The source-aware program timeline is complete and shared between the person and agent. Multicam MP4/MP3 rendering is deliberately routed to a worker instead of browser ffmpeg.wasm; the current UI blocks accidental local multicam renders and continues to support SRT export. This keeps the hackathon app responsive with hour-long HD originals while leaving server rendering as the next production worker task.
+Multicam composed export renders the active angle only; program-cut-aware server rendering is the next production worker task.
 
 ## Architecture
 
@@ -28,7 +32,8 @@ local files chosen in OpenCast
         │
         ├── resumable 16 MiB chunks ──> Docker/Fly.io media worker + volume
         │                                  ffmpeg: 16 kHz / 24 kbps audio
-        │                                  OpenAI: diarization + word timing (parallel)
+        │                                  OpenAI: word timing first (bounded pool),
+        │                                  speaker labels as background enrichment
         │                                              │
         └── local object URL for immediate preview     ▼
                                       source transcript + source/master timestamps
@@ -36,7 +41,7 @@ local files chosen in OpenCast
                                      OpenCast master timeline + WebMCP tools
 ```
 
-The worker avoids an in-memory copy of the original. It writes the browser’s resumable chunks directly to the mounted Fly volume and converts the completed source to 16 kHz mono Ogg/Opus in 15-minute chunks by default (configurable from one to 20 minutes). Each chunk makes two concurrent transcription requests—one for speakers and one for word timing—and stays below the model duration limit even when a whole episode compresses to a small file. Originals remain available for later preview; completed jobs retain only their compact result, while failed/in-progress jobs retain their audio and checkpoints for up to 24 hours. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
+The worker avoids an in-memory copy of the original. It writes the browser’s resumable chunks directly to the mounted Fly volume and converts the completed source to 16 kHz mono Ogg/Opus in 15-minute chunks by default (configurable from one to 20 minutes). Word timing (`whisper-1`) runs for all chunks through a bounded pool and completes the job — the transcript is editable at that point. Speaker labeling (`gpt-4o-transcribe-diarize`) then runs on a separate background queue with a real 10-minute request deadline, relabeling the live transcript when it finishes and never blocking the editor; multi-track jobs skip it entirely. Originals remain available for later preview; completed jobs retain only their compact result, while failed/in-progress jobs retain their audio and checkpoints for up to 24 hours. Plan worker disk for at least roughly twice the largest input source while ffmpeg is running.
 
 ## Quick start: transcript/editor only
 
@@ -48,7 +53,7 @@ npm run dev
 
 Open `http://localhost:3000`, create a project, and choose one or more audio/video recordings. To process local media, configure the Fly worker as described below; the OpenAI key stays on the worker, never in the browser or Next.js app. The product intentionally starts with media rather than manual transcript-file import.
 
-For the demo workspace, sign in with `admin` / `admin`.
+Sign in with the credentials you set in `OPENCAST_AUTH_USERNAME` / `OPENCAST_AUTH_PASSWORD` (in `.env.local` for local development).
 
 ## Deploying long HD episodes
 
@@ -65,6 +70,10 @@ NEXT_PUBLIC_OPENCAST_MEDIA_WORKER_URL=https://your-opencast-worker.example.com
 
 # Shared only with the worker. The app uses it to issue scoped upload, playback, and job tickets.
 OPENCAST_WORKER_SIGNING_SECRET=
+
+# Single-admin login. Login fails closed until both are set.
+OPENCAST_AUTH_USERNAME=
+OPENCAST_AUTH_PASSWORD=
 
 # Sign the single-admin HttpOnly session cookie.
 OPENCAST_AUTH_SECRET=
@@ -123,14 +132,15 @@ Useful agent sequence:
 4. `queue_source_ingest` / `get_source_ingest_status` for a stored long source, after user approval.
 5. `get_source_transcript` and `propose_program_cut`
 6. `apply_program_cut` with the returned `expected_revision`, then the normal transcript-edit tools.
+7. `create_composition` from `find_in_transcript` ranges for hooks and clips; `set_captions`, `add_image_overlay`, and `set_background_removal` for the on-screen look; `export` with `format: "composed"` for the finished video.
 
-`rename_project` is available for project organization. `delete_project` requires `confirm: true` and removes only the browser-saved project record; it never deletes Fly originals.
+`rename_project` is available for project organization. `delete_project` requires `confirm: true` and permanently removes the saved project along with its uploaded Fly media.
 
 Every tool calls the same Zustand action hub as the UI. Agent activity is shown in the right-hand panel, and program edits use a revision check so an agent does not overwrite a newer live human edit.
 
 ## OpenAI use and cost shape
 
-For each compact audio input, the worker makes two concurrent requests: `gpt-4o-transcribe-diarize` for speaker-labelled turns and `whisper-1` with word timestamps for edit precision. The original HD video is never sent to the transcription endpoint. Each completed response's OpenAI `usage` field and elapsed time are retained with the worker job for accurate per-job diagnostics. Check the current [OpenAI audio model pricing](https://developers.openai.com/api/docs/pricing) before launch and enforce authentication/rate limits before making a public service.
+For each compact audio input, the worker calls `whisper-1` with word timestamps for edit precision, then — for single-track sources only — `gpt-4o-transcribe-diarize` for speaker-labelled turns as a background enrichment. Multi-track projects pay nothing for diarization: the track identifies the speaker. The original HD video is never sent to the transcription endpoint. Each completed response's OpenAI `usage` field and elapsed time are retained with the worker job for accurate per-job diagnostics. Check the current [OpenAI audio model pricing](https://developers.openai.com/api/docs/pricing) before launch and enforce authentication/rate limits before making a public service.
 
 ## Verification
 
@@ -144,6 +154,8 @@ npm run test:projects
 npm run test:multicam
 npm run test:worker-ticket
 npm run test:webmcp
+npm run test:speakers
+npm run test:compositions
 npm run typecheck
 npm run build
 node --check worker/src/index.mjs
