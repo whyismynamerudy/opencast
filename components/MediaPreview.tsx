@@ -19,6 +19,32 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const backgroundRemoval = useEditorStore((state) => state.backgroundRemoval);
   const segCanvasRef = useRef<HTMLCanvasElement>(null);
   const [segReady, setSegReady] = useState(false);
+
+  // Captions and image layers must composite against the footage's own
+  // frame, not the preview pane: a 16:9 video letterboxed in a tall pane
+  // would otherwise get a portrait background and far-away captions. The
+  // stage frame tracks the source aspect ratio (16:9 for audio) and fits
+  // inside the pane — the same geometry the composed export renders.
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [videoAspect, setVideoAspect] = useState(16 / 9);
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect || !rect.width || !rect.height) return;
+      let width = rect.width;
+      let height = width / videoAspect;
+      if (height > rect.height) {
+        height = rect.height;
+        width = height * videoAspect;
+      }
+      setFrameSize({ width: Math.round(width), height: Math.round(height) });
+    });
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [videoAspect, mediaUrl]);
   const activeSourceId = useEditorStore((state) => state.activeSourceId);
   const activeSource = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId));
   const time = useEditorStore((state) => state.playbackTime);
@@ -132,6 +158,10 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
     src: previewUrl,
     onTimeUpdate: () => setPlaybackTime(sourceToMasterTime(mediaRef.current?.currentTime ?? 0, activeSource?.syncOffset)),
     onEnded: () => setIsPlaying(false),
+    onLoadedMetadata: () => {
+      const video = mediaRef.current as HTMLVideoElement | null;
+      if (video?.videoWidth && video.videoHeight) setVideoAspect(video.videoWidth / video.videoHeight);
+    },
   };
 
   const underImage = overlays.findLast((overlay) => overlay.layer === "under" && time >= overlay.start && time <= overlay.end);
@@ -140,19 +170,21 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
 
   return (
     <section className={`preview ${mediaKind === "audio" ? "audio-preview" : ""}`}>
-      <div className="media-stage">
-        {underImage && <img className="stage-layer stage-under" src={underImage.url} alt={underImage.name} />}
-        {mediaKind === "video" ? <video {...shared} playsInline className={segActive ? "video-hidden" : ""} /> : <audio {...shared} />}
-        {segActive && <canvas ref={segCanvasRef} className="stage-layer stage-person" aria-hidden="true" />}
-        {mediaKind === "audio" && !overImage && <div className="audio-art"><span>OPENCAST</span><strong>{mediaName}</strong><i /></div>}
-        {overImage && <img className="stage-layer stage-over" src={overImage.url} alt={overImage.name} />}
-        {caption.words.length > 0 && (
-          <p className="caption-track" aria-live="off">
-            {caption.words.map((word) => (
-              <span key={word.id} className={word.id === caption.activeId ? "active" : ""}>{word.text}</span>
-            ))}
-          </p>
-        )}
+      <div className="media-stage" ref={stageRef}>
+        <div className="stage-frame" style={frameSize ? { width: frameSize.width, height: frameSize.height } : undefined}>
+          {underImage && <img className="stage-layer stage-under" src={underImage.url} alt={underImage.name} />}
+          {mediaKind === "video" ? <video {...shared} playsInline className={segActive ? "video-hidden" : ""} /> : <audio {...shared} />}
+          {segActive && <canvas ref={segCanvasRef} className="stage-layer stage-person" aria-hidden="true" />}
+          {mediaKind === "audio" && !overImage && <div className="audio-art"><span>OPENCAST</span><strong>{mediaName}</strong><i /></div>}
+          {overImage && <img className="stage-layer stage-over" src={overImage.url} alt={overImage.name} />}
+          {caption.words.length > 0 && (
+            <p className="caption-track" aria-live="off">
+              {caption.words.map((word) => (
+                <span key={word.id} className={word.id === caption.activeId ? "active" : ""}>{word.text}</span>
+              ))}
+            </p>
+          )}
+        </div>
       </div>
       <div className="preview-controls">
         <span className="preview-time">{formatTime(time)}</span>

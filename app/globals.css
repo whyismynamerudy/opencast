@@ -717,17 +717,21 @@ h1, .library-header h1, .login-card h1 {
 .caption-toggle { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; color: var(--muted); border: var(--hair) solid var(--rule); background: transparent; }
 .caption-toggle:hover { color: var(--ink); border-color: var(--rule-2); }
 
-/* on-screen layers: under-image → footage → over-image → captions → controls */
+/* on-screen layers, scoped to the footage's own frame so a landscape video
+   gets a landscape background and captions inside the picture — matching
+   exactly what the composed export renders. */
+.stage-frame { position: relative; overflow: hidden; max-width: 100%; max-height: 100%; }
+.stage-frame video { width: 100%; height: 100%; object-fit: contain; }
 .stage-layer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .stage-under { z-index: 0; }
-.media-stage video { position: relative; z-index: 1; }
-.media-stage video.video-hidden { visibility: hidden; }
+.stage-frame video { position: relative; z-index: 1; }
+.stage-frame video.video-hidden { visibility: hidden; }
 .stage-person { z-index: 1; object-fit: contain; }
 .stage-over { z-index: 2; }
 .caption-track {
   position: absolute;
-  inset-inline: 10%;
-  bottom: 72px;
+  inset-inline: 7%;
+  bottom: 9%;
   z-index: 3;
   display: flex;
   flex-wrap: wrap;
