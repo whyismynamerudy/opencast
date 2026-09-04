@@ -34,6 +34,22 @@ export type ClipSegment = TimeRange & {
   index: number;
 };
 
+/**
+ * A timed image placed on the preview. `under` sits behind the footage (a
+ * background layer); `over` covers it (a B-roll style insert). Captions and
+ * transport controls always render above both.
+ */
+export type OverlayLayer = "under" | "over";
+export type ImageOverlay = {
+  id: string;
+  kind: "image";
+  name: string;
+  url: string;
+  start: number;
+  end: number;
+  layer: OverlayLayer;
+};
+
 export type Speaker = {
   id: number;
   name: string;

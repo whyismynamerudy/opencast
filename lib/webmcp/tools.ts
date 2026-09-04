@@ -320,6 +320,55 @@ export function buildWebMCPTools(store: Store): WebMCPTool[] {
       }),
     },
     {
+      name: "set_captions",
+      description: "Turn the live auto-captions on or off. Captions render the word being spoken over the preview, straight from the transcript timing.",
+      inputSchema: objectSchema({ enabled: { type: "boolean" } }, ["enabled"]),
+      execute: run("set_captions", (args) => {
+        state().setCaptionsEnabled(args.enabled === true);
+        return { captionsEnabled: args.enabled === true, message: args.enabled === true ? "Captions are on." : "Captions are off." };
+      }),
+    },
+    {
+      name: "list_overlays",
+      description: "List the timed images layered on the preview, and whether captions are on.",
+      inputSchema: objectSchema(),
+      execute: run("list_overlays", () => ({
+        captionsEnabled: state().captionsEnabled,
+        overlays: state().overlays.map(({ id, name, url, layer, start, end }) => ({ id, name, url, layer, start, end })),
+        message: "Listed on-screen elements.",
+      })),
+    },
+    {
+      name: "add_image_overlay",
+      description: "Place an image on the preview for a master-timeline range. layer=over covers the footage (a B-roll style insert); layer=under sits behind it as a background. Use an https image URL.",
+      inputSchema: objectSchema({
+        url: { type: "string", minLength: 8, maxLength: 2000 },
+        start: { type: "number", minimum: 0 },
+        end: { type: "number", minimum: 0 },
+        layer: { type: "string", enum: ["over", "under"] },
+        name: { type: "string", minLength: 1, maxLength: 60 },
+      }, ["url", "start", "end"]),
+      execute: run("add_image_overlay", (args) => {
+        const overlay = state().addImageOverlay({
+          url: String(args.url ?? ""),
+          start: Number(args.start),
+          end: Number(args.end),
+          layer: args.layer === "under" ? "under" : "over",
+          name: typeof args.name === "string" ? args.name : undefined,
+        });
+        return { overlay_id: overlay.id, message: `Placed “${overlay.name}” (${overlay.layer}) from ${overlay.start.toFixed(1)}s to ${overlay.end.toFixed(1)}s.` };
+      }),
+    },
+    {
+      name: "remove_overlay",
+      description: "Remove a timed image from the preview by overlay_id (see list_overlays).",
+      inputSchema: objectSchema({ overlay_id: { type: "string", minLength: 1 } }, ["overlay_id"]),
+      execute: run("remove_overlay", (args) => {
+        if (!state().removeOverlay(String(args.overlay_id ?? ""))) throw new Error("That overlay does not exist in the open project.");
+        return { removed: true, message: "Removed the overlay." };
+      }),
+    },
+    {
       name: "apply_program_cut",
       description: "Choose which source is visible for a master-timeline range. Supply expected_revision from propose_program_cut or get_project_state to avoid overwriting a newer live edit.",
       inputSchema: objectSchema({ source_id: { type: "string", minLength: 1 }, start: { type: "number", minimum: 0 }, end: { type: "number", minimum: 0 }, expected_revision: { type: "integer", minimum: 0 } }, ["source_id", "start", "end", "expected_revision"]),

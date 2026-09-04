@@ -11,6 +11,7 @@ import { useEditorStore } from "@/lib/store";
 import { AgentActivityPanel } from "./AgentActivityPanel";
 import { CompositionsPanel } from "./CompositionsPanel";
 import { EditPanel } from "./EditPanel";
+import { OverlaysPanel } from "./OverlaysPanel";
 import { ExportDialog } from "./ExportDialog";
 import { MediaPreview, formatTime } from "./MediaPreview";
 import { Timeline } from "./Timeline";
@@ -164,6 +165,7 @@ export function Editor({ onOpenProjects, onSignOut, webMcpAvailable = false }: E
           <div className="inspector-scroll">
           <EditPanel />
           <CompositionsPanel />
+          <OverlaysPanel />
           <SourceManager />
           <ExportDialog />
           <AgentActivityPanel webMcpAvailable={webMcpAvailable} />

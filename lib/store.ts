@@ -19,8 +19,10 @@ import type {
   ClipSegment,
   EditorSnapshot,
   ExportRequest,
+  ImageOverlay,
   ManualCut,
   MediaKind,
+  OverlayLayer,
   SceneBoundary,
   Speaker,
   SpeakerTurn,
@@ -51,6 +53,9 @@ export type ProjectSnapshot = {
   transcription: TranscriptionState;
   /** Optional for older saved snapshots that predate compositions. */
   compositions?: Composition[];
+  /** Optional for older saved snapshots that predate on-screen elements. */
+  overlays?: ImageOverlay[];
+  captionsEnabled?: boolean;
 };
 
 type EditorState = {
@@ -71,6 +76,8 @@ type EditorState = {
   speakers: Speaker[];
   compositions: Composition[];
   activeCompositionId: string | null;
+  overlays: ImageOverlay[];
+  captionsEnabled: boolean;
   selectedWordIds: string[];
   playbackTime: number;
   isPlaying: boolean;
@@ -118,6 +125,9 @@ type EditorState = {
   removeFromComposition: (id: string, ranges: TimeRange[]) => { ok: boolean; seconds: number };
   cutWordsFromActiveComposition: (ids: string[]) => number;
   removeFillersFromActiveComposition: () => number;
+  setCaptionsEnabled: (enabled: boolean) => void;
+  addImageOverlay: (overlay: { url: string; start: number; end: number; layer?: OverlayLayer; name?: string }) => ImageOverlay;
+  removeOverlay: (id: string) => boolean;
   undo: () => boolean;
   redo: () => boolean;
   setPlaybackTime: (time: number) => void;
@@ -168,6 +178,8 @@ export function blankProjectSnapshot(title = "Untitled podcast"): ProjectSnapsho
     activity: [],
     transcription: initialTranscription(),
     compositions: [],
+    overlays: [],
+    captionsEnabled: true,
   };
 }
 
@@ -214,6 +226,7 @@ function cloneProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
       ...composition,
       segments: (composition.segments ?? []).map((segment) => ({ ...segment })),
     })),
+    overlays: (snapshot.overlays ?? []).map((overlay) => ({ ...overlay })),
     mediaSources: snapshot.mediaSources.map((source) => ({ ...source })),
     programSegments: snapshot.programSegments.map((segment) => ({ ...segment })),
     words: snapshot.words.map((word) => ({ ...word })),
@@ -294,6 +307,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
     speakers: [],
     compositions: [],
     activeCompositionId: null,
+    overlays: [],
+    captionsEnabled: true,
     selectedWordIds: [],
     playbackTime: 0,
     isPlaying: false,
@@ -794,6 +809,32 @@ export const useEditorStore = create<EditorState>((set, get) => {
         .map((word) => word.id));
     },
 
+    setCaptionsEnabled: (enabled) => set((state) => ({ captionsEnabled: Boolean(enabled), projectRevision: state.projectRevision + 1 })),
+
+    addImageOverlay: ({ url, start, end, layer, name }) => {
+      const trimmedUrl = url.trim();
+      if (!/^(https?:|data:image\/)/i.test(trimmedUrl)) throw new Error("Overlay images need an https or data:image URL.");
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Overlay start and end must be a valid master-timeline range.");
+      const overlay: ImageOverlay = {
+        id: crypto.randomUUID(),
+        kind: "image",
+        name: name?.trim().slice(0, 60) || "Image",
+        url: trimmedUrl,
+        start: Math.max(0, start),
+        end,
+        layer: layer === "under" ? "under" : "over",
+      };
+      set((state) => ({ overlays: [...state.overlays, overlay], projectRevision: state.projectRevision + 1 }));
+      return overlay;
+    },
+
+    removeOverlay: (id) => {
+      const state = get();
+      if (!state.overlays.some((overlay) => overlay.id === id)) return false;
+      set({ overlays: state.overlays.filter((overlay) => overlay.id !== id), projectRevision: state.projectRevision + 1 });
+      return true;
+    },
+
     undo: () => {
       const state = get();
       const previous = state.history.at(-1);
@@ -887,6 +928,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
           ingestJobId: source.ingestJobId,
         })),
         programSegments: state.programSegments.map((segment) => ({ ...segment })),
+        captionsEnabled: state.captionsEnabled,
+        overlays: state.overlays.map(({ id, name, layer, start, end }) => ({ id, name, layer, start, end })),
         activeCompositionId: state.activeCompositionId,
         compositions: state.compositions.map((composition) => ({
           id: composition.id,
@@ -928,6 +971,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
           ...composition,
           segments: composition.segments.map((segment) => ({ ...segment })),
         })),
+        overlays: state.overlays.map((overlay) => ({ ...overlay })),
+        captionsEnabled: state.captionsEnabled,
       };
     },
 
@@ -955,6 +1000,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
           segments: normalizeSegments(composition.segments ?? []),
         })),
         activeCompositionId: null,
+        overlays: (next.overlays ?? []).filter((overlay) => overlay?.kind === "image" && typeof overlay.url === "string"),
+        captionsEnabled: next.captionsEnabled !== false,
         selectedWordIds: [],
         playbackTime: 0,
         isPlaying: false,

@@ -1,16 +1,34 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play } from "lucide-react";
+import { Captions, CaptionsOff, Pause, Play } from "lucide-react";
 import { rangeAt } from "@/lib/edits";
 import { masterToSourceTime, sourceToMasterTime } from "@/lib/multicam";
 import { useEditorStore } from "@/lib/store";
-import type { TimeRange } from "@/lib/types";
+import type { TimeRange, Word } from "@/lib/types";
+
+/** The words on screen right now: the active word with a few neighbors. */
+function captionWindow(words: Word[], time: number): { words: Word[]; activeId: string | null } {
+  const spoken = words.filter((word) => !word.deleted);
+  if (!spoken.length) return { words: [], activeId: null };
+  let index = spoken.findIndex((word) => time >= word.start && time <= word.end);
+  if (index === -1) index = spoken.findIndex((word) => word.start > time);
+  if (index === -1) return { words: [], activeId: null };
+  const active = time >= spoken[index].start ? spoken[index] : null;
+  const from = Math.max(0, index - 3);
+  const to = Math.min(spoken.length, index + 5);
+  const window = spoken.slice(from, to).filter((word) => Math.abs(word.start - spoken[index].start) < 3.5);
+  return { words: window, activeId: active?.id ?? null };
+}
 
 export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const mediaUrl = useEditorStore((state) => state.mediaUrl);
   const mediaKind = useEditorStore((state) => state.mediaKind);
   const mediaName = useEditorStore((state) => state.mediaName);
+  const words = useEditorStore((state) => state.words);
+  const overlays = useEditorStore((state) => state.overlays);
+  const captionsEnabled = useEditorStore((state) => state.captionsEnabled);
+  const setCaptionsEnabled = useEditorStore((state) => state.setCaptionsEnabled);
   const activeSourceId = useEditorStore((state) => state.activeSourceId);
   const activeSource = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId));
   const time = useEditorStore((state) => state.playbackTime);
@@ -89,18 +107,36 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
     onEnded: () => setIsPlaying(false),
   };
 
+  const underImage = overlays.findLast((overlay) => overlay.layer === "under" && time >= overlay.start && time <= overlay.end);
+  const overImage = overlays.findLast((overlay) => overlay.layer === "over" && time >= overlay.start && time <= overlay.end);
+  const caption = captionsEnabled ? captionWindow(words, time) : { words: [], activeId: null };
+
   return (
     <section className={`preview ${mediaKind === "audio" ? "audio-preview" : ""}`}>
       <div className="media-stage">
+        {underImage && <img className="stage-layer stage-under" src={underImage.url} alt={underImage.name} />}
         {mediaKind === "video" ? <video {...shared} playsInline /> : <audio {...shared} />}
-        {mediaKind === "audio" && <div className="audio-art"><span>OPENCAST</span><strong>{mediaName}</strong><i /></div>}
+        {mediaKind === "audio" && !overImage && <div className="audio-art"><span>OPENCAST</span><strong>{mediaName}</strong><i /></div>}
+        {overImage && <img className="stage-layer stage-over" src={overImage.url} alt={overImage.name} />}
+        {caption.words.length > 0 && (
+          <p className="caption-track" aria-live="off">
+            {caption.words.map((word) => (
+              <span key={word.id} className={word.id === caption.activeId ? "active" : ""}>{word.text}</span>
+            ))}
+          </p>
+        )}
       </div>
       <div className="preview-controls">
         <span className="preview-time">{formatTime(time)}</span>
         <button type="button" className="round-control" aria-label={isPlaying ? "Pause" : "Play"} onClick={() => setIsPlaying(!isPlaying)}>
           {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
         </button>
-        <span className="muted">{activeSourceId ? "angle preview · master time" : "edited playback"}</span>
+        <span className="preview-side">
+          <button type="button" className="caption-toggle" aria-label={captionsEnabled ? "Hide captions" : "Show captions"} onClick={() => setCaptionsEnabled(!captionsEnabled)}>
+            {captionsEnabled ? <Captions size={15} /> : <CaptionsOff size={15} />}
+          </button>
+          <span className="muted">{activeSourceId ? "angle preview · master time" : "edited playback"}</span>
+        </span>
       </div>
     </section>
   );

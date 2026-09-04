@@ -73,3 +73,20 @@ assert.equal(useEditorStore.getState().compositions.length, 0);
 assert.equal(useEditorStore.getState().words.length, 50);
 
 console.log("Composition tests passed.");
+
+// ── overlays and captions ───────────────────────────────────
+const overlay = useEditorStore.getState().addImageOverlay({ url: "https://example.com/chart.png", start: 5, end: 12, layer: "over", name: "Chart" });
+assert.equal(useEditorStore.getState().overlays.length, 1);
+assert.throws(() => useEditorStore.getState().addImageOverlay({ url: "javascript:alert(1)", start: 0, end: 1 }));
+assert.throws(() => useEditorStore.getState().addImageOverlay({ url: "https://example.com/x.png", start: 9, end: 3 }));
+useEditorStore.getState().setCaptionsEnabled(false);
+const roundTrip = useEditorStore.getState().getProjectSnapshot();
+assert.equal(roundTrip.overlays?.length, 1);
+assert.equal(roundTrip.captionsEnabled, false);
+useEditorStore.getState().loadProjectSnapshot(roundTrip);
+assert.equal(useEditorStore.getState().overlays[0].name, "Chart");
+assert.equal(useEditorStore.getState().captionsEnabled, false);
+assert.ok(useEditorStore.getState().removeOverlay(overlay.id));
+assert.equal(useEditorStore.getState().overlays.length, 0);
+
+console.log("Overlay and caption tests passed.");
