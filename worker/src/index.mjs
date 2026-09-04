@@ -855,6 +855,9 @@ async function enrichJobSpeakers(job) {
     console.info(`[job ${job.id}] Speaker labels ready for ${job.filename}.`);
     await clearCompletedJobArtifacts(job).catch((cleanupError) => console.warn(`[job ${job.id}] Could not clear completed media artifacts: ${describeError(cleanupError)}`));
   } catch (error) {
+    // Deleting the project mid-labeling removes the job directory out from
+    // under in-flight writes; that is an abort, not a failure.
+    if (deletedSourceIds.has(job.sourceId)) return;
     // The transcript stays fully usable; keep artifacts so a later restart can
     // resume labeling from the last diarized chunk until retention expires.
     job.speakerStage = "error";

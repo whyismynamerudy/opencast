@@ -166,12 +166,15 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
     let rangeIndex = 0;
     let renderedBefore = 0;
     let finished = false;
+    let lastMediaTime = -1;
+    let lastAdvanceAt = performance.now();
 
     const finish = (error?: Error) => {
       if (finished) return;
       finished = true;
       ticker.terminate();
       URL.revokeObjectURL(tickerUrl);
+      window.clearInterval(watchdog);
       video.pause();
       recorder.onstop = () => {
         void audioContext.close().catch(() => undefined);
@@ -186,6 +189,10 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
       if (finished || recorder.state !== "recording") return;
       const range = ranges[rangeIndex];
       const time = video.currentTime;
+      if (time > lastMediaTime + 0.005) {
+        lastMediaTime = time;
+        lastAdvanceAt = performance.now();
+      }
       drawFrame(time);
       canvasTrack.requestFrame?.();
       onProgress?.(Math.min(0.99, (renderedBefore + Math.max(0, time - range.start)) / totalSeconds), "rendering");
@@ -198,15 +205,22 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
     };
     ticker.onmessage = step;
 
-    // A hard ceiling so a stalled decode can never hang the export forever.
-    const watchdog = window.setTimeout(() => finish(new Error("Rendering timed out.")), (totalSeconds + 30) * 1000);
+    // Heavily edited episodes seek across dozens of cut boundaries over the
+    // network, so a fixed "duration + grace" deadline is wrong. Instead the
+    // watchdog only fires when playback genuinely stops advancing.
+    const watchdog = window.setInterval(() => {
+      if (performance.now() - lastAdvanceAt > 60_000) {
+        finish(new Error("Rendering stalled — the media stream stopped advancing for 60 seconds."));
+      }
+    }, 5_000);
     video.onseeked = () => {
+      lastAdvanceAt = performance.now();
       if (recorder.state === "inactive") {
         recorder.start(500);
         void video.play().catch(() => finish(new Error("Playback for rendering was blocked.")));
       }
     };
-    video.onerror = () => { window.clearTimeout(watchdog); finish(new Error("The source media failed during rendering.")); };
+    video.onerror = () => finish(new Error("The source media failed during rendering."));
     video.currentTime = Math.max(0.01, ranges[0].start);
   });
 }
