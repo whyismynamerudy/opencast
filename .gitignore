@@ -6,3 +6,5 @@ out/
 !.env.example
 .vercel/
 docs/*.local.md
+.DS_Store
+docs/episode-assets/
