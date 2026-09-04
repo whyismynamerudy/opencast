@@ -127,7 +127,12 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
   const audioDestination = audioContext.createMediaStreamDestination();
   audioSource.connect(audioDestination); // stream only; nothing to the speakers
 
-  const canvasStream = canvas.captureStream(FRAME_RATE);
+  // Frames are pushed explicitly from a Worker-timed loop: browsers freeze
+  // requestAnimationFrame (and throttle main-thread timers) in hidden tabs,
+  // which used to freeze the picture and captions if the person switched
+  // away during a realtime render. Worker timers keep ticking.
+  const canvasStream = canvas.captureStream(0);
+  const canvasTrack = canvasStream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
   const stream = new MediaStream([...canvasStream.getVideoTracks(), ...audioDestination.stream.getAudioTracks()]);
   const chunks: BlobPart[] = [];
   const { mimeType, extension } = pickContainer();
@@ -151,16 +156,22 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
     if (captionsEnabled) drawCaptions(ctx, words, time, width, height);
   };
 
+  const tickerUrl = URL.createObjectURL(new Blob(
+    [`setInterval(() => postMessage(0), ${Math.max(10, Math.round(1000 / FRAME_RATE))});`],
+    { type: "text/javascript" },
+  ));
+  const ticker = new Worker(tickerUrl);
+
   return await new Promise<ComposedRender>((resolve, reject) => {
     let rangeIndex = 0;
     let renderedBefore = 0;
-    let frame = 0;
     let finished = false;
 
     const finish = (error?: Error) => {
       if (finished) return;
       finished = true;
-      cancelAnimationFrame(frame);
+      ticker.terminate();
+      URL.revokeObjectURL(tickerUrl);
       video.pause();
       recorder.onstop = () => {
         void audioContext.close().catch(() => undefined);
@@ -172,10 +183,11 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
     };
 
     const step = () => {
-      if (finished) return;
+      if (finished || recorder.state !== "recording") return;
       const range = ranges[rangeIndex];
       const time = video.currentTime;
       drawFrame(time);
+      canvasTrack.requestFrame?.();
       onProgress?.(Math.min(0.99, (renderedBefore + Math.max(0, time - range.start)) / totalSeconds), "rendering");
       if (time >= range.end - 0.03 || video.ended) {
         renderedBefore += range.end - range.start;
@@ -183,8 +195,8 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
         if (rangeIndex >= ranges.length) { finish(); return; }
         video.currentTime = ranges[rangeIndex].start;
       }
-      frame = requestAnimationFrame(step);
     };
+    ticker.onmessage = step;
 
     // A hard ceiling so a stalled decode can never hang the export forever.
     const watchdog = window.setTimeout(() => finish(new Error("Rendering timed out.")), (totalSeconds + 30) * 1000);
@@ -192,7 +204,6 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
       if (recorder.state === "inactive") {
         recorder.start(500);
         void video.play().catch(() => finish(new Error("Playback for rendering was blocked.")));
-        frame = requestAnimationFrame(step);
       }
     };
     video.onerror = () => { window.clearTimeout(watchdog); finish(new Error("The source media failed during rendering.")); };
