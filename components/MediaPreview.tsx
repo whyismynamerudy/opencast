@@ -19,6 +19,7 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const backgroundRemoval = useEditorStore((state) => state.backgroundRemoval);
   const segCanvasRef = useRef<HTMLCanvasElement>(null);
   const [segReady, setSegReady] = useState(false);
+  const [storedMedia, setStoredMedia] = useState<{ sourceId: string; url: string } | null>(null);
 
   // Captions and image layers must composite against the footage's own
   // frame, not the preview pane: a 16:9 video letterboxed in a tall pane
@@ -44,7 +45,9 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
     });
     observer.observe(stage);
     return () => observer.disconnect();
-  }, [videoAspect, mediaUrl]);
+    // storedMedia matters: with no local file the stage mounts only after the
+    // playback ticket resolves, and the observer must attach to that element.
+  }, [videoAspect, mediaUrl, storedMedia]);
   const activeSourceId = useEditorStore((state) => state.activeSourceId);
   const activeSource = useEditorStore((state) => state.mediaSources.find((source) => source.id === state.activeSourceId));
   const time = useEditorStore((state) => state.playbackTime);
@@ -52,7 +55,6 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const setPlaybackTime = useEditorStore((state) => state.setPlaybackTime);
   const setIsPlaying = useEditorStore((state) => state.setIsPlaying);
   const mediaRef = useRef<HTMLMediaElement>(null);
-  const [storedMedia, setStoredMedia] = useState<{ sourceId: string; url: string } | null>(null);
 
   useEffect(() => {
     if (activeSource?.localUrl || !activeSource?.storagePath) return;

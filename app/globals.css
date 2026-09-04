@@ -723,7 +723,9 @@ h1, .library-header h1, .login-card h1 {
 /* on-screen layers, scoped to the footage's own frame so a landscape video
    gets a landscape background and captions inside the picture — matching
    exactly what the composed export renders. */
-.stage-frame { position: relative; overflow: hidden; max-width: 100%; max-height: 100%; }
+/* Falls back to filling the pane until the fitted size is measured, so the
+   footage can never collapse to zero height while waiting on the observer. */
+.stage-frame { position: relative; overflow: hidden; width: 100%; height: 100%; max-width: 100%; max-height: 100%; }
 .stage-frame video { width: 100%; height: 100%; object-fit: contain; }
 .stage-layer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .stage-under { z-index: 0; }
