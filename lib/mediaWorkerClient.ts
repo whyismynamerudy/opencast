@@ -162,10 +162,14 @@ export async function queueMediaWorkerSource(sourceId: string): Promise<QueueRes
       if (resumeResponse.status !== 404) throw new Error(resumePayload.error || "Could not resume the media worker job.");
     }
 
+    // With two or more tracks the recording itself identifies the speaker —
+    // one person per source — so ML diarization is only worth paying for on
+    // single, pre-mixed files.
+    const diarize = editor.mediaSources.length <= 1;
     const response = await fetch(`${baseUrl}/jobs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ticket }),
+      body: JSON.stringify({ ticket, diarize }),
     });
     const payload = await response.json() as { id?: string; error?: string };
     if (!response.ok || !payload.id) throw new Error(payload.error || "Media worker did not create a job.");

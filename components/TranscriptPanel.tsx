@@ -62,7 +62,9 @@ export function TranscriptPanel({ cuts }: { cuts: TimeRange[] }) {
     const source = sources.find((item) => item.id === wordSourceId);
     if (source && name.startsWith(`${source.name} · `)) {
       const short = name.slice(source.name.length + 3);
-      if (sources.length > 1) return `${source.role} · ${short}`;
+      // On multi-track projects the track itself is the identity: an
+      // undiarized placeholder prints as just the role ("host", "guest").
+      if (sources.length > 1) return /^Speaker \d+$/.test(short) ? source.role : `${source.role} · ${short}`;
       return short.length <= 2 ? `Speaker ${short}` : short;
     }
     return name;

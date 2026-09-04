@@ -106,7 +106,7 @@ async function run() {
         url: "/api/media/worker-ticket",
         body: JSON.stringify({ sourceId, filename: "guest-angle.mp4" }),
       },
-      { url: "https://worker.example.test/jobs", body: JSON.stringify({ ticket: "signed-worker-ticket" }) },
+      { url: "https://worker.example.test/jobs", body: JSON.stringify({ ticket: "signed-worker-ticket", diarize: true }) },
     ]);
   } finally {
     globalThis.fetch = previousFetch;

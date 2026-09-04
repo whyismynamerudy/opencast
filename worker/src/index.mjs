@@ -209,6 +209,7 @@ function jobMetadata(job) {
     id: job.id,
     sourceId: job.sourceId,
     filename: job.filename,
+    diarize: job.diarize,
     status: job.status,
     stage: job.stage,
     progress: job.progress,
@@ -742,11 +743,13 @@ async function processJob(job) {
     job.stage = "complete";
     job.progress = 1;
     job.result = result;
-    job.speakerStage = diarizedPayloads.every(Boolean) ? "complete" : "pending";
+    job.speakerStage = diarizedPayloads.every(Boolean)
+      ? "complete"
+      : job.diarize === false ? "skipped" : "pending";
     job.speakerError = null;
     await persistJob(job);
     console.info(`[job ${job.id}] Words ready: ${result.words.length} words from ${job.filename}; speaker labels ${job.speakerStage}.`);
-    if (job.speakerStage === "complete") {
+    if (job.speakerStage !== "pending") {
       await clearCompletedJobArtifacts(job).catch((cleanupError) => console.warn(`[job ${job.id}] Could not clear completed media artifacts: ${describeError(cleanupError)}`));
     } else {
       enqueueSpeakerEnrichment(job);
@@ -1018,7 +1021,10 @@ const server = createServer(async (request, response) => {
       const claim = readJobTicket(body.ticket);
       const now = Date.now();
       await storedMedia(claim);
-      const job = { id: crypto.randomUUID(), sourceId: claim.sourceId, filename: claim.filename, status: "queued", stage: "queued", progress: 0, error: null, result: null, createdAt: now, updatedAt: now };
+      // Multi-track projects skip ML diarization entirely: the track itself
+      // says who is speaking, the Descript/Riverside model.
+      const diarize = body.diarize !== false;
+      const job = { id: crypto.randomUUID(), sourceId: claim.sourceId, filename: claim.filename, diarize, status: "queued", stage: "queued", progress: 0, error: null, result: null, createdAt: now, updatedAt: now };
       await persistJob(job);
       jobs.set(job.id, job);
       enqueueJob(job);

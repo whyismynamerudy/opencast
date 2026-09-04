@@ -35,7 +35,7 @@ export function EditPanel() {
     for (const source of sources) {
       if (name.startsWith(`${source.name} · `)) {
         const short = name.slice(source.name.length + 3);
-        if (sources.length > 1) return `${source.role} · ${short}`;
+        if (sources.length > 1) return /^Speaker \d+$/.test(short) ? source.role : `${source.role} · ${short}`;
         return short.length <= 2 ? `Speaker ${short}` : short;
       }
     }
