@@ -938,6 +938,9 @@ button.composition-row:hover { border-color: var(--rule-2); }
 
 /* ── responsive ──────────────────────────────────────────── */
 @media (max-width: 1080px) {
+  /* The centered title collides with topbar actions in narrow panes, like
+     the ChatGPT desktop browser. */
+  .project-name { display: none; }
   .studio-shell { grid-template-columns: minmax(0, 1fr) 272px; }
   .studio-workspace { grid-template-columns: minmax(280px, 1fr) minmax(280px, 0.9fr); }
   .transcript-scroll { padding: 22px 24px 40px; }
@@ -946,11 +949,12 @@ button.composition-row:hover { border-color: var(--rule-2); }
 @media (max-width: 900px) {
   .editor-shell { height: auto; min-height: 100dvh; overflow: visible; }
   .studio-shell, .inspector-closed .studio-shell { display: block; }
-  .studio-main { min-height: calc(100dvh - 56px); grid-template-rows: minmax(520px, 1fr) 190px; }
+  .studio-main { min-height: calc(100dvh - 56px); grid-template-rows: minmax(520px, 1fr) 210px; }
+  .preview-controls .muted { display: none; }
   .studio-inspector { border-top: var(--hair) solid var(--rule); border-left: 0; }
   .inspector-closed .studio-inspector { display: none; }
   .inspector-scroll { display: grid; grid-template-columns: 1fr 1fr; }
-  .project-summary { grid-column: 1 / -1; }
+  .agent-panel, .project-summary { grid-column: 1 / -1; }
 }
 
 @media (max-width: 860px) {
@@ -965,7 +969,7 @@ button.composition-row:hover { border-color: var(--rule-2); }
   .project-name { display: none; }
   .toolbar-button.inspector-toggle { display: none; }
   .export-main { padding: 7px 10px; }
-  .studio-main { grid-template-rows: auto 180px; }
+  .studio-main { grid-template-rows: auto 210px; }
   .studio-workspace { display: flex; flex-direction: column; }
   .preview { order: -1; min-height: 300px; border-bottom: var(--hair) solid var(--rule); }
   .transcript-panel { min-height: 460px; border-right: 0; }
