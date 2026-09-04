@@ -97,7 +97,9 @@ export async function renderComposedMedia({ src, kind, keepRanges, words, captio
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
   video.preload = "auto";
-  video.src = src;
+  // A cache-buster dodges any previously cached non-CORS response for the
+  // same URL, which would taint the canvas despite crossOrigin above.
+  video.src = /^https?:/i.test(src) ? `${src}${src.includes("?") ? "&" : "?"}ctx=render` : src;
   await new Promise<void>((resolve, reject) => {
     video.onloadedmetadata = () => resolve();
     video.onerror = () => reject(new Error("The source media could not be loaded for rendering."));

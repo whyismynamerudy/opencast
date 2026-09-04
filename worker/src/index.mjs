@@ -63,7 +63,7 @@ function setCors(request, response) {
     response.setHeader("vary", "Origin");
   }
   response.setHeader("access-control-allow-methods", "GET,HEAD,POST,PATCH,OPTIONS");
-  response.setHeader("access-control-allow-headers", "authorization,content-type,upload-offset");
+  response.setHeader("access-control-allow-headers", "authorization,content-type,upload-offset,range");
   response.setHeader("access-control-expose-headers", "upload-offset,upload-length,accept-ranges,content-range");
 }
 

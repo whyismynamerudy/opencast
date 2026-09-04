@@ -126,7 +126,16 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
               canvas.height = video.videoHeight;
             }
             context.clearRect(0, 0, canvas.width, canvas.height);
-            remover.draw(context, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height);
+            try {
+              remover.draw(context, video, video.videoWidth, video.videoHeight, canvas.width, canvas.height);
+            } catch {
+              // A tainted or otherwise unreadable frame: show the plain
+              // footage instead of crashing the segmentation loop.
+              disposed = true;
+              setSegReady(false);
+              useEditorStore.getState().addActivity("set_background_removal", "This source could not be read for background removal in this browser; showing the full frame.", "error");
+              return;
+            }
           }
           frame = requestAnimationFrame(loop);
         };
@@ -158,6 +167,10 @@ export function MediaPreview({ cuts }: { cuts: TimeRange[] }) {
   const shared = {
     ref: mediaRef as React.RefObject<HTMLVideoElement> & React.RefObject<HTMLAudioElement>,
     src: previewUrl,
+    // CORS clearance keeps canvases clean when the footage streams from Fly:
+    // background removal draws this element into a canvas, and a tainted
+    // canvas breaks MediaPipe's WebGL upload. Harmless for local blob URLs.
+    crossOrigin: "anonymous" as const,
     onTimeUpdate: () => setPlaybackTime(sourceToMasterTime(mediaRef.current?.currentTime ?? 0, activeSource?.syncOffset)),
     onEnded: () => setIsPlaying(false),
     onLoadedMetadata: () => {
